@@ -89,3 +89,36 @@ test("expiry sweep closes inactive sessions and preserves an idempotency tombsto
   assert.equal((await manager.delete(created.sessionId)).ok, true);
   await manager.close();
 });
+
+test("delete acknowledges a released slot without waiting for slow runtime cleanup", async () => {
+  let releaseCleanup!: () => void;
+  const cleanupGate = new Promise<void>(resolve => {
+    releaseCleanup = resolve;
+  });
+  const runtime = new FakeRuntime();
+  runtime.close = async () => {
+    runtime.closeCalls += 1;
+    await cleanupGate;
+  };
+  const manager = new SessionManager({
+    maxSessions: 1,
+    publicUrl: "http://browser-service:3006",
+    runtimeFactory: factoryWith(runtime),
+  });
+
+  const created = await manager.create({ ttl: 60 });
+  const released = await Promise.race([
+    manager.delete(created.sessionId),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("delete waited for runtime cleanup")), 100),
+    ),
+  ]);
+
+  assert.equal(released.cleanupQueued, true);
+  assert.equal(manager.activeCount, 0);
+  assert.deepEqual(await manager.delete(created.sessionId), released);
+  assert.equal(runtime.closeCalls, 1);
+
+  releaseCleanup();
+  await manager.close();
+});

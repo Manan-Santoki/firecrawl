@@ -35,9 +35,10 @@ services:
       - browser-profiles:/data/profiles
     security_opt:
       - no-new-privileges:true
+    init: true
     cap_drop:
       - ALL
-    pids_limit: 512
+    pids_limit: ${BROWSER_SERVICE_PIDS_LIMIT:-1024}
     cpus: ${BROWSER_SERVICE_CPUS:-2.0}
     mem_limit: ${BROWSER_SERVICE_MEMORY:-4G}
     memswap_limit: ${BROWSER_SERVICE_MEMORY:-4G}
