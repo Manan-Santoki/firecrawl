@@ -1,5 +1,6 @@
 {
   "formatVersion": 1,
+  "compatibilityPolicy": "expand-only",
   "advisoryLockName": "firecrawl-community-schema-migrations-v1",
   "supportFiles": [
     "postgres/090-seed.sql"

@@ -39,6 +39,9 @@ jobs:
           - component: browser
             context: apps/browser-service-community
             image: firecrawl-browser-community
+          - component: migrations
+            context: community/migrations
+            image: firecrawl-migrations-community
     steps:
       - name: Resolve immutable release
         id: release

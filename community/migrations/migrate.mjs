@@ -68,13 +68,33 @@ async function sha256(file) {
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+export function assertExpandOnlySql(sql, file = "migration") {
+  const withoutComments = String(sql)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\r\n]*/g, " ");
+  const forbidden = [
+    /\bDROP\s+(?:TABLE|SCHEMA|COLUMN|TYPE|FUNCTION|INDEX|VIEW|MATERIALIZED\s+VIEW|DATABASE)\b/i,
+    /\bTRUNCATE\b/i,
+    /\bALTER\s+TABLE[\s\S]{0,300}?\b(?:DROP|RENAME)\b/i,
+    /\bALTER\s+TABLE[\s\S]{0,300}?\bALTER\s+COLUMN\b[\s\S]{0,120}?\bTYPE\b/i,
+  ];
+  const match = forbidden.find(pattern => pattern.test(withoutComments));
+  if (match) {
+    throw new Error(`${file} violates the expand-only compatibility policy (${match})`);
+  }
+}
+
 export async function loadManifest(manifestPath = path.join(moduleDirectory, "manifest.json")) {
   const root = path.dirname(path.resolve(manifestPath));
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   if (manifest.formatVersion !== 1 || !Array.isArray(manifest.migrations)) {
     throw new Error("Unsupported or malformed migration manifest");
   }
-  if (!manifest.advisoryLockName || manifest.migrations.length === 0) {
+  if (
+    !manifest.advisoryLockName ||
+    manifest.compatibilityPolicy !== "expand-only" ||
+    manifest.migrations.length === 0
+  ) {
     throw new Error("Migration manifest requires an advisory lock name and migrations");
   }
 
@@ -100,6 +120,7 @@ export async function loadManifest(manifestPath = path.join(moduleDirectory, "ma
     if (actual !== migration.sha256) {
       throw new Error(`Manifest checksum does not match ${migration.file}: expected ${migration.sha256}, got ${actual}`);
     }
+    assertExpandOnlySql(await readFile(absoluteFile, "utf8"), migration.file);
     migration.absoluteFile = absoluteFile;
   }
 
@@ -198,7 +219,13 @@ SELECT pg_advisory_unlock(hashtextextended(${sqlLiteral(manifest.advisoryLockNam
 `;
 }
 
-export function buildBaselineSql(manifest) {
+export function buildBaselineSql(manifest, { through } = {}) {
+  let migrations = manifest.migrations;
+  if (through) {
+    const throughIndex = migrations.findIndex(migration => migration.version === through);
+    if (throughIndex < 0) throw new Error(`Unknown baseline-through migration: ${through}`);
+    migrations = migrations.slice(0, throughIndex + 1);
+  }
   const checks = (manifest.baselineChecks ?? []).map((check, index) => `
 DO $baseline_check_${index}$
 BEGIN
@@ -208,7 +235,7 @@ BEGIN
 END
 $baseline_check_${index}$;
 `).join("\n");
-  const inserts = manifest.migrations.map(migration => `
+  const inserts = migrations.map(migration => `
 INSERT INTO ${ledgerName} (
   version, description, checksum_sha256, transactional, irreversible, baselined, execution_ms
 ) VALUES (
@@ -300,6 +327,7 @@ function parseArguments(argv) {
     command,
     allowIrreversible: args.includes("--allow-irreversible") || process.env.ALLOW_IRREVERSIBLE_MIGRATIONS === "true",
     confirmExisting: args.includes("--confirm-existing") || process.env.COMMUNITY_MIGRATIONS_BASELINE_EXISTING === "true",
+    baselineThrough: process.env.COMMUNITY_MIGRATIONS_BASELINE_THROUGH,
   };
   const manifestIndex = args.indexOf("--manifest");
   options.manifestPath = manifestIndex >= 0 ? args[manifestIndex + 1] : undefined;
@@ -322,13 +350,13 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     if (!options.confirmExisting) {
       throw new Error("baseline requires --confirm-existing or COMMUNITY_MIGRATIONS_BASELINE_EXISTING=true");
     }
-    await runPsql(buildBaselineSql(manifest), environment);
-    console.log(`Baselined ${manifest.migrations.length} reviewed migrations.`);
+    await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
+    console.log("Baselined the reviewed existing-schema migrations.");
     return;
   }
   if (options.confirmExisting) {
-    await runPsql(buildBaselineSql(manifest), environment);
-    console.log(`Baselined ${manifest.migrations.length} reviewed migrations before apply.`);
+    await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
+    console.log("Baselined the reviewed existing-schema migrations before apply.");
   }
   await assertFreshOrTracked(environment);
   await runPsql(buildApplySql(manifest, options), environment);

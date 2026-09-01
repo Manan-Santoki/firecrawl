@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   buildApplySql,
   buildBaselineSql,
+  assertExpandOnlySql,
   connectionEnvironment,
   loadManifest,
   migrationStatus,
@@ -31,6 +32,7 @@ test("migration checksums are portable across LF and CRLF checkouts", async () =
   await writeFile(path.join(directory, "postgres", "010-one.sql"), canonicalSql.replaceAll("\n", "\r\n"));
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
     formatVersion: 1,
+    compatibilityPolicy: "expand-only",
     advisoryLockName: "test",
     migrations: [{
       version: "010-one",
@@ -42,6 +44,15 @@ test("migration checksums are portable across LF and CRLF checkouts", async () =
     }],
   }));
   await assert.doesNotReject(loadManifest(path.join(directory, "manifest.json")));
+});
+
+test("expand-only migrations reject destructive schema operations", () => {
+  assert.doesNotThrow(() => assertExpandOnlySql("ALTER TABLE jobs ADD COLUMN state text;"));
+  assert.throws(() => assertExpandOnlySql("DROP TABLE jobs;", "010-drop.sql"), /expand-only/);
+  assert.throws(
+    () => assertExpandOnlySql("ALTER TABLE jobs RENAME COLUMN state TO status;"),
+    /expand-only/,
+  );
 });
 
 test("apply SQL holds one advisory lock and wraps transactional migrations", async () => {
@@ -69,6 +80,15 @@ test("baseline validates fingerprints and records reviewed checksums", async () 
   assert.match(sql, /true, 0/);
 });
 
+test("baseline-through never marks later forward migrations as applied", async () => {
+  const manifest = await loadManifest();
+  const sql = buildBaselineSql(manifest, { through: "020-current-schema" });
+  assert.match(sql, /VALUES \(\s*'010-prerequisites'/);
+  assert.match(sql, /VALUES \(\s*'020-current-schema'/);
+  assert.doesNotMatch(sql, /VALUES \(\s*'030-selfhost-constraints'/);
+  assert.throws(() => buildBaselineSql(manifest, { through: "999-unknown" }), /Unknown baseline-through/);
+});
+
 test("status distinguishes pending, applied, baselined, and checksum mismatch", async () => {
   const manifest = await loadManifest();
   const first = manifest.migrations[0];
@@ -89,6 +109,7 @@ test("manifest validation rejects checksum drift and undeclared migrations", asy
   await writeFile(path.join(directory, "postgres", "020-unlisted.sql"), "SELECT 2;\n");
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
     formatVersion: 1,
+    compatibilityPolicy: "expand-only",
     advisoryLockName: "test",
     migrations: [{
       version: "010-one",

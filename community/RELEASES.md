@@ -13,7 +13,7 @@
 
 1. Production deploys an immutable image digest, never a floating tag.
 2. Staging and production use separate databases, queues, Redis namespaces, browser sessions, secrets and domains.
-3. A database backup and a tested rollback target exist before promotion.
+3. A database backup and a tested restore target exist before promotion. Database migrations are expand-only and forward-compatible with the previously verified application image; image rollback never claims to reverse schema state.
 4. The compatibility report is attached to the release and records unavailable or degraded capabilities.
 5. Failure preserves the previous production digest and opens an incident issue; it never retries an unsafe migration automatically.
 6. A release name is derived only from an annotated or lightweight semantic upstream tag. The moving upstream `main` branch is never published under an older release name.

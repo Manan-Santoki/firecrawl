@@ -28,6 +28,8 @@ node community/migrations/migrate.mjs baseline --confirm-existing
 
 For the Compose overlay, set `COMMUNITY_MIGRATIONS_BASELINE_EXISTING=true` for one deployment and remove it immediately afterward. Baseline mode checks required relations/functions before writing checksummed ledger rows. Normal apply fails closed when it finds application tables without a ledger.
 
+Automated platform adapters adopting the original four-file community schema may additionally pin `COMMUNITY_MIGRATIONS_BASELINE_THROUGH=040-selfhost-rpcs`. This keeps the reviewed adoption boundary fixed: migrations added in later releases are executed normally and can never be silently baselined.
+
 Every future schema change must be a new numbered SQL file plus manifest entry. Declare whether it is transactional and irreversible, update its SHA-256 before review, and never edit an applied file. Non-transactional migrations must be narrowly justified in the pull request.
 
 The schema source of truth is [`apps/api/src/db/schema/public.ts`](../../apps/api/src/db/schema/public.ts). Community release CI checks this bundle before publishing images; schema changes are treated as high-risk and never auto-promoted to production.
