@@ -70,7 +70,8 @@ test("apply SQL holds one advisory lock and wraps transactional migrations", asy
   const sql = buildApplySql(manifest);
   assert.match(sql, /pg_advisory_lock/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.schema_migrations/);
-  assert.match(sql, /\\ir '.*010-prerequisites\.sql'/);
+  assert.match(sql, /CREATE SCHEMA IF NOT EXISTS extensions/);
+  assert.doesNotMatch(sql, /\\ir /);
   assert.match(sql, /BEGIN;[\s\S]*010-prerequisites[\s\S]*COMMIT;/);
   assert.match(sql, /checksum mismatch for applied migration/);
 });

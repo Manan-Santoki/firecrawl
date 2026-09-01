@@ -14,10 +14,6 @@ function sqlLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function psqlPath(value) {
-  return String(value).replaceAll("\\", "/").replaceAll("'", "''");
-}
-
 export function redact(text, environment = process.env) {
   let result = String(text ?? "");
   const candidates = [
@@ -136,8 +132,10 @@ export async function loadManifest(
     if (actual !== migration.sha256) {
       throw new Error(`Manifest checksum does not match ${migration.file}: expected ${migration.sha256}, got ${actual}`);
     }
-    assertExpandOnlySql(await readFile(absoluteFile, "utf8"), migration.file);
+    const sql = (await readFile(absoluteFile, "utf8")).replace(/\r\n?/g, "\n");
+    assertExpandOnlySql(sql, migration.file);
     migration.absoluteFile = absoluteFile;
+    migration.sql = sql;
   }
 
   const postgresDirectory = path.join(root, "postgres");
@@ -209,7 +207,7 @@ SELECT EXISTS (SELECT 1 FROM ${ledgerName} WHERE version = ${sqlLiteral(migratio
   \\echo 'applying ${migration.version}'
   SELECT clock_timestamp() AS migration_started_at \\gset
   ${begin}
-  \\ir '${psqlPath(migration.absoluteFile)}'
+  ${migration.sql}
   INSERT INTO ${ledgerName} (
     version, description, checksum_sha256, transactional, irreversible, baselined, execution_ms
   ) VALUES (
