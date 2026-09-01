@@ -22,8 +22,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - name: Test capability manifest tooling
-        run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs
+      - name: Test capability manifest and release tooling
+        run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs community/scripts/release-impact.test.mjs
       - name: Test migration tooling
         run: node --test community/scripts/migrate.test.mjs
       - name: Verify generated feature matrix

@@ -32,8 +32,25 @@ jobs:
           git fetch origin main
           test "$(git rev-parse HEAD)" = "${TESTED_SHA}"
           test "$(git rev-parse origin/main)" = "${TESTED_SHA}"
+      - name: Determine whether runtime images changed
+        id: impact
+        run: |
+          git fetch origin --tags --force
+          previous="$(git tag --merged HEAD --list 'community-v*' --sort=-version:refname | head -n 1)"
+          if [[ -z "${previous}" ]]; then
+            release_required=true
+            echo "No prior community release tag is reachable; an initial release is required."
+          else
+            mapfile -t changed_paths < <(git diff --name-only "${previous}^{commit}" HEAD)
+            release_required="$(node community/scripts/release-impact.mjs "${changed_paths[@]}")"
+            printf 'Compared %s with %s. Changed paths:\n' "${previous}" "$(git rev-parse HEAD)"
+            printf '  %s\n' "${changed_paths[@]}"
+          fi
+          echo "release_required=${release_required}" >> "${GITHUB_OUTPUT}"
+          echo "Runtime image release required: ${release_required}"
       - name: Create the next immutable community release tag
         id: release
+        if: steps.impact.outputs.release_required == 'true'
         run: |
           git fetch origin --tags --force
           git remote add canonical https://github.com/firecrawl/firecrawl.git
@@ -68,9 +85,13 @@ jobs:
           fi
           echo "release=${release}" >> "${GITHUB_OUTPUT}"
       - name: Dispatch the container build explicitly
+        if: steps.impact.outputs.release_required == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh workflow run community-release.yml
           --ref ${{ steps.release.outputs.release }}
           --field release=${{ steps.release.outputs.release }}
+      - name: Record documentation-only completion
+        if: steps.impact.outputs.release_required != 'true'
+        run: echo "No runtime image inputs changed; retaining the current immutable community release."
