@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Test capability manifest tooling
-        run: node --test community/scripts/render-capabilities.test.mjs
+        run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs
       - name: Test migration tooling
         run: node --test community/scripts/migrate.test.mjs
       - name: Verify generated feature matrix
@@ -37,7 +37,18 @@ jobs:
           FIRECRAWL_TEAM_ID: 22222222-2222-4222-8222-222222222222
           FIRECRAWL_API_KEY_UUID: 33333333-3333-4333-8333-333333333333
           BROWSER_SERVICE_API_KEY: ci-browser-key
-        run: docker compose -f docker-compose.yaml -f community/docker-compose.auth.yaml -f community/docker-compose.browser.yaml config --quiet
+        run: |
+          docker compose -f docker-compose.yaml -f community/docker-compose.auth.yaml -f community/docker-compose.browser.yaml config --quiet
+          resolved_context="$(docker compose -f docker-compose.yaml -f community/docker-compose.auth.yaml -f community/docker-compose.browser.yaml config --format json | jq -r '.services["browser-service-community"].build.context')"
+          test "$(realpath "${resolved_context}")" = "$(realpath apps/browser-service-community)"
+      - name: Build browser service through the combined community stack
+        env:
+          APP_POSTGRES_PASSWORD: ci-postgres-password
+          FIRECRAWL_ORG_ID: 11111111-1111-4111-8111-111111111111
+          FIRECRAWL_TEAM_ID: 22222222-2222-4222-8222-222222222222
+          FIRECRAWL_API_KEY_UUID: 33333333-3333-4333-8333-333333333333
+          BROWSER_SERVICE_API_KEY: ci-browser-key
+        run: docker compose -f docker-compose.yaml -f community/docker-compose.auth.yaml -f community/docker-compose.browser.yaml build browser-service-community
 
   api-build:
     runs-on: ubuntu-latest

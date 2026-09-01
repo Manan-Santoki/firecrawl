@@ -4,13 +4,24 @@
 
 This matrix compares API-level availability, not managed-service guarantees. A feature is only marked **Available** after it has a provider-neutral implementation and a self-host compatibility test. **Configurable** means the API path is public but requires an operator-supplied service or model.
 
+## Verification snapshot
+
+- **Source of truth:** [Firecrawl hosted v2 documentation and hosted OpenAPI](https://docs.firecrawl.dev/api-reference/v2-introduction)
+- **Hosted OpenAPI:** [v2 specification](https://docs.firecrawl.dev/api-reference/v2-openapi.json)
+- **Community release:** `community-v2.11.267.2`
+- **Test evidence ID:** `staging-audit-2026-08-31`
+- **Verified:** 2026-08-31
+- **Limitations:** Live staging evidence establishes behavior for the recorded release only. Provider-backed, managed-infrastructure and untested format variants are not inferred from route presence.
+
 | Status | Meaning |
 | --- | --- |
 | Available | Runs entirely from code and services published in this repository. |
 | Configurable | Works when an operator supplies a documented third-party or local provider. |
+| Partial | A useful subset is release-qualified, but the hosted behavior or format matrix is incomplete. |
 | Planned | A provider-neutral community implementation is planned but not yet release-qualified. |
 | Unavailable | Depends on a service or contract that is not publicly distributable. |
 | Verification needed | Public code exists, but the community distribution has not completed a release-grade compatibility test. |
+| Managed service only | This is an operated Cloud service guarantee rather than a distributable API implementation. |
 
 ## Core API
 
@@ -25,7 +36,9 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Search | Yes | Configurable | SearXNG or another supported search provider | Self-host CI runs the SearXNG path |
+| Search | Yes | Configurable | SearXNG or another supported search provider | Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified |
+| Research Index | Yes | Planned | Provider-neutral research corpus, ingestion and retrieval service | Staging returns HTTP 404 because RESEARCH_PROXY_URL is not configured |
+| Developer Index | Yes | Planned | Self-managed repository corpus plus keyword and vector index | Staging returns HTTP 404 because the index database/provider is unavailable |
 
 ## AI
 
@@ -33,22 +46,25 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | --- | --- | --- | --- | --- |
 | Structured extraction | Yes | Configurable | OpenAI-compatible endpoint or Ollama and a supported model | AI-gated v2 extract snips |
 | JSON output format | Yes | Configurable | OpenAI-compatible endpoint or Ollama and a supported model | AI-gated scrape format snips |
+| Summary, question and highlights formats | Yes | Configurable | A correctly configured supported AI provider and model | Staging returned provider errors because no compatible AI provider was configured |
 | Autonomous Agent API | Yes | Planned | Provider-neutral replacement for EXTRACT_V3_BETA_URL | Release qualification not yet complete |
 
 ## Browser
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Interactive browser sessions | Yes | Verification needed | Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL | Node, Bash, Python, CDP, lifecycle and container contract tests pass; staging soak remains |
-| Browser live view | Yes | Verification needed | TLS route to the community browser service | Authenticated live screencast viewer implemented; staging soak remains |
+| Interactive browser sessions | Yes | Available | Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL | Staging create, list, Node, Python, Bash, CDP, execute, delete and scrape-bound interact/stop all passed |
+| Browser live view | Yes | Available | TLS route to the community browser service | Staging returned Live View and Interactive Live View URLs and the Live View page returned HTTP 200 |
 | Browser session replay | Yes | Planned | Durable recording artifacts and retention policy | Recording endpoints intentionally return a documented unsupported response |
-| Scrape actions | Yes | Available | Playwright service | Action coverage in scrape snips |
+| Natural-language browser execution | Yes | Configurable | Community browser service plus a supported generative AI provider | Direct code execution passed; prompt execution reported the missing Google Generative AI credential |
+| Scrape actions | Yes | Planned | Provider-neutral action interpreter in the public Playwright/browser service | Live staging request returned HTTP 400 and explicitly required private Fire Engine |
+| Automatic screenshots and branding extraction | Yes | Planned | Public rendering implementation replacing the Fire Engine dependency | Staging screenshot returned an unsupported-engine warning and branding returned HTTP 500 |
 
 ## Documents
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Parse documents and uploads | Yes | Verification needed | Local upload storage plus publicly available parsers | Self-host upload-ref coverage exists; format parity remains under audit |
+| Parse documents and uploads | Yes | Partial | Local upload storage plus publicly available parsers | A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified |
 | Audio and video extraction | Yes | Planned | Provider-neutral replacement for AVGRAB_SERVICE_URL | No release-qualified community service yet |
 
 ## Operations
@@ -56,8 +72,9 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | Webhooks | Yes | Available | Reachable webhook target; local targets require explicit opt-in | Webhook snips and SELF_HOSTED_WEBHOOK_URL support |
-| Website monitoring API | Yes | Verification needed | Persistent application database and monitoring worker | Routes and worker are public; community production contract is under audit |
-| Change tracking | Yes | Verification needed | Persistent application database and object storage | Public route support exists; retention and migration coverage is incomplete |
+| Support Ask and documentation search | Yes | Unavailable | Independent support/search backend rather than Firecrawl's SUPPORT_AGENT_URL | Staging returns HTTP 503 because the Cloud support backend is absent |
+| Website monitoring API | Yes | Partial | Persistent application database and monitoring worker | Staging create, run, completed-check and delete lifecycle passed; email and Slack notification providers were not configured |
+| Change tracking | Yes | Partial | Persistent application database and object storage | Two identical staging scrapes both returned new, proving snapshot persistence is not release-qualified |
 
 ## Platform
 
@@ -66,6 +83,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | API-key authentication | Yes | Available | Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true | Portable PostgreSQL bootstrap and authenticated Compose overlay |
 | Operator-controlled rate limits | Yes | Available | Portable self-host authentication RPCs; operator owns capacity controls | selfhost_unlimited_rate_limit_flags database contract |
 | Usage metering and billing hooks | Yes | Configurable | Portable no-op adapter by default; replace with an operator-owned metering adapter when required | bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing |
+| Cloud credit and token usage reporting | Yes | Unavailable | Operator-owned metering implementation | Staging Cloud usage endpoints return HTTP 500 while self-host billing is intentionally a no-op |
 
 ## Clients
 
@@ -79,7 +97,8 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | Managed stealth/proxy network | Yes | Unavailable | Bring an independent proxy provider using documented proxy variables | Firecrawl Cloud proxy infrastructure is not open source |
-| Managed scaling, SLA and support | Yes | Unavailable | Operator-owned capacity, monitoring, backups and incident response | Operational service rather than distributable source code |
+| Cloud dashboard and enterprise security controls | Yes | Planned | Community operator UI plus provider-neutral SSO, audit, SIEM, IP/key and threat-policy enforcement | Swagger documents the API only; hosted dashboard, SSO, SIEM and threat protection are not configured on staging |
+| Managed scaling, SLA and support | Yes | Managed service only | Operator-owned capacity, monitoring, backups and incident response | Operational service rather than distributable source code |
 
 ## Scope and evidence rules
 

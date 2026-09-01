@@ -14,7 +14,13 @@ services:
         condition: service_healthy
 
   browser-service-community:
-    build: ../apps/browser-service-community
+    # Compose resolves every relative path against the first Compose file, not
+    # this overlay. Keep this path rooted at the repository Compose project so
+    # `docker compose -f docker-compose.yaml -f ... build` uses the checked-in
+    # browser service instead of a sibling directory outside the repository.
+    build:
+      context: apps/browser-service-community
+      dockerfile: Dockerfile
     environment:
       HOST: 0.0.0.0
       PORT: 3006

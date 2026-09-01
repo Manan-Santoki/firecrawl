@@ -10,7 +10,7 @@ This directory defines the provider-neutral, self-hosted distribution maintained
 
 ## Release contract
 
-- `upstream` mirrors `firecrawl/firecrawl` without community commits.
+- `upstream` mirrors the exact commit of the latest semantic `firecrawl/firecrawl` release tag without community commits; moving upstream `main` is never mislabeled as a release.
 - `main` is the supported community line.
 - `sync/upstream-vX.Y.Z` branches carry automated upstream merges for review.
 - `community-vX.Y.Z.N` tags identify community releases, where `X.Y.Z` is the upstream release and `N` is the community revision.
@@ -32,9 +32,9 @@ The community distribution will standardize these variables as their implementat
 
 Until a variable is implemented and tested, it is documentation of the intended contract rather than a production switch. See [`COMMUNITY_FEATURES.md`](../COMMUNITY_FEATURES.md) for current evidence.
 
-## Browser service preview
+## Browser service
 
-The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Its lifecycle and real Chromium Node/Bash paths are tested, but `/interact` remains **Planned** until portable application-database migrations and container/Python qualification are complete.
+The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Release evidence now covers lifecycle, Node/Python/Bash execution, CDP, Live View and scrape-bound interact/stop against an isolated staging deployment. Replay, long-running soak qualification and AI-prompt execution have separate prerequisites recorded in the capability matrix.
 
 For a fresh community installation, enable the portable application database and browser service together with:
 
@@ -55,3 +55,7 @@ The overlay applies versioned, checksummed database migrations before seeding or
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.
+
+## Hosted contract drift
+
+The scheduled compatibility workflow treats Firecrawl's hosted v2 OpenAPI as the contract source of truth and compares it with a deployed community `/openapi.json`. Operators configure that endpoint through the `COMMUNITY_OPENAPI_URL` repository variable so deployment domains remain outside this public repository. Missing hosted operations produce a retained JSON artifact and a blocking GitHub issue; additional community-only operations are reported but do not fail compatibility.

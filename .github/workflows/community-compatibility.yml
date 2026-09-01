@@ -30,3 +30,62 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue create --title "Community compatibility regression $(date -u +%F)" --body "The scheduled static compatibility contract failed on ${GITHUB_SHA}. No release or production promotion should proceed until the failing capability is fixed or reclassified."
+
+  openapi-contract:
+    if: github.repository == 'Manan-Santoki/firecrawl'
+    runs-on: ubuntu-latest
+    env:
+      HOSTED_OPENAPI_URL: https://docs.firecrawl.dev/api-reference/v2-openapi.json
+      COMMUNITY_OPENAPI_URL: ${{ vars.COMMUNITY_OPENAPI_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Compare hosted and community v2 operations
+        id: comparison
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ -z "${COMMUNITY_OPENAPI_URL}" ]]; then
+            printf '%s\n' '{"schemaVersion":1,"compatible":false,"configurationError":"Set the COMMUNITY_OPENAPI_URL repository variable to the deployed community /openapi.json endpoint."}' > artifacts/openapi-compatibility.json
+            exit 2
+          fi
+          node community/scripts/compare-openapi.mjs \
+            --hosted "${HOSTED_OPENAPI_URL}" \
+            --community "${COMMUNITY_OPENAPI_URL}" \
+            --output artifacts/openapi-compatibility.json
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-vs-community-openapi-${{ github.run_id }}
+          path: artifacts/openapi-compatibility.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Open or update the OpenAPI drift issue
+        if: steps.comparison.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh label create community-openapi-drift --color D73A4A --description "Hosted v2 operation missing or comparison unavailable" --force
+          issue="$(gh issue list --state open --label community-openapi-drift --json number --jq '.[0].number // empty')"
+          body="Hosted-vs-community OpenAPI comparison failed for run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Download the hosted-vs-community-openapi-${GITHUB_RUN_ID} artifact for the missing-operation report. Promotion is blocked until the operation is implemented or the capability matrix is corrected."
+          if [[ -z "${issue}" ]]; then
+            gh issue create --title "Hosted v2 OpenAPI drift" --label community-openapi-drift --body "${body}"
+          else
+            gh issue comment "${issue}" --body "${body}"
+          fi
+          exit 1
+      - name: Close resolved OpenAPI drift issue
+        if: steps.comparison.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          issue="$(gh issue list --state open --label community-openapi-drift --json number --jq '.[0].number // empty')"
+          if [[ -n "${issue}" ]]; then
+            gh issue close "${issue}" --comment "Hosted v2 operation compatibility passed in ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          fi
