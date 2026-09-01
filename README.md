@@ -909,6 +909,8 @@ Firecrawl is open source under the AGPL-3.0 license. The cloud version at [firec
 
 ![Open Source vs Cloud](https://raw.githubusercontent.com/firecrawl/firecrawl/main/img/open-source-cloud.png)
 
+This community fork maintains a release-tested, endpoint-level [Community feature matrix](./COMMUNITY_FEATURES.md). It distinguishes features that run from public source, features that require an operator-provided service, work still in progress, and managed Firecrawl Cloud infrastructure that is not open source.
+
 To run locally, see the [Contributing Guide](https://github.com/firecrawl/firecrawl/blob/main/CONTRIBUTING.md). To self-host, see [Self-Hosting Guide](https://docs.firecrawl.dev/contributing/self-host).
 
 ---

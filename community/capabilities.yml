@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "distribution": "community",
+  "upstream": "firecrawl/firecrawl",
+  "statusDefinitions": {
+    "available": "Runs entirely from code and services published in this repository.",
+    "configurable": "Works when an operator supplies a documented third-party or local provider.",
+    "planned": "A provider-neutral community implementation is planned but not yet release-qualified.",
+    "unavailable": "Depends on a service or contract that is not publicly distributable.",
+    "verification-needed": "Public code exists, but the community distribution has not completed a release-grade compatibility test."
+  },
+  "capabilities": [
+    {
+      "id": "scrape",
+      "group": "Core API",
+      "name": "Scrape",
+      "cloud": true,
+      "community": "available",
+      "requirements": "API, queue, Redis, RabbitMQ, NuQ PostgreSQL and Playwright",
+      "evidence": "POST /v2/scrape self-host snips"
+    },
+    {
+      "id": "crawl",
+      "group": "Core API",
+      "name": "Crawl and crawl status",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 crawl self-host snips"
+    },
+    {
+      "id": "batch-scrape",
+      "group": "Core API",
+      "name": "Batch scrape",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 batch scrape self-host snips"
+    },
+    {
+      "id": "map",
+      "group": "Core API",
+      "name": "Map",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 map self-host snips"
+    },
+    {
+      "id": "search",
+      "group": "Discovery",
+      "name": "Search",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "SearXNG or another supported search provider",
+      "evidence": "Self-host CI runs the SearXNG path"
+    },
+    {
+      "id": "extract",
+      "group": "AI",
+      "name": "Structured extraction",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "OpenAI-compatible endpoint or Ollama and a supported model",
+      "evidence": "AI-gated v2 extract snips"
+    },
+    {
+      "id": "json-format",
+      "group": "AI",
+      "name": "JSON output format",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "OpenAI-compatible endpoint or Ollama and a supported model",
+      "evidence": "AI-gated scrape format snips"
+    },
+    {
+      "id": "agent",
+      "group": "AI",
+      "name": "Autonomous Agent API",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Provider-neutral replacement for EXTRACT_V3_BETA_URL",
+      "evidence": "Release qualification not yet complete"
+    },
+    {
+      "id": "browser-interact",
+      "group": "Browser",
+      "name": "Interactive browser sessions",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL",
+      "evidence": "Node, Bash, Python, CDP, lifecycle and container contract tests pass; staging soak remains"
+    },
+    {
+      "id": "browser-live-view",
+      "group": "Browser",
+      "name": "Browser live view",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "TLS route to the community browser service",
+      "evidence": "Authenticated live screencast viewer implemented; staging soak remains"
+    },
+    {
+      "id": "browser-replay",
+      "group": "Browser",
+      "name": "Browser session replay",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Durable recording artifacts and retention policy",
+      "evidence": "Recording endpoints intentionally return a documented unsupported response"
+    },
+    {
+      "id": "actions",
+      "group": "Browser",
+      "name": "Scrape actions",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Playwright service",
+      "evidence": "Action coverage in scrape snips"
+    },
+    {
+      "id": "parse",
+      "group": "Documents",
+      "name": "Parse documents and uploads",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Local upload storage plus publicly available parsers",
+      "evidence": "Self-host upload-ref coverage exists; format parity remains under audit"
+    },
+    {
+      "id": "media",
+      "group": "Documents",
+      "name": "Audio and video extraction",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Provider-neutral replacement for AVGRAB_SERVICE_URL",
+      "evidence": "No release-qualified community service yet"
+    },
+    {
+      "id": "webhooks",
+      "group": "Operations",
+      "name": "Webhooks",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Reachable webhook target; local targets require explicit opt-in",
+      "evidence": "Webhook snips and SELF_HOSTED_WEBHOOK_URL support"
+    },
+    {
+      "id": "monitoring-api",
+      "group": "Operations",
+      "name": "Website monitoring API",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Persistent application database and monitoring worker",
+      "evidence": "Routes and worker are public; community production contract is under audit"
+    },
+    {
+      "id": "change-tracking",
+      "group": "Operations",
+      "name": "Change tracking",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Persistent application database and object storage",
+      "evidence": "Public route support exists; retention and migration coverage is incomplete"
+    },
+    {
+      "id": "api-auth",
+      "group": "Platform",
+      "name": "API-key authentication",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true",
+      "evidence": "Portable PostgreSQL bootstrap and authenticated Compose overlay"
+    },
+    {
+      "id": "rate-limits",
+      "group": "Platform",
+      "name": "Operator-controlled rate limits",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Portable self-host authentication RPCs; operator owns capacity controls",
+      "evidence": "selfhost_unlimited_rate_limit_flags database contract"
+    },
+    {
+      "id": "billing",
+      "group": "Platform",
+      "name": "Usage metering and billing hooks",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "Portable no-op adapter by default; replace with an operator-owned metering adapter when required",
+      "evidence": "bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing"
+    },
+    {
+      "id": "mcp",
+      "group": "Clients",
+      "name": "MCP server",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Firecrawl MCP client configured with the self-hosted API URL and key",
+      "evidence": "MCP tools work against the deployed v2 API"
+    },
+    {
+      "id": "sdks",
+      "group": "Clients",
+      "name": "Official SDK compatibility",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Override the SDK API URL with the self-host endpoint",
+      "evidence": "SDKs are maintained in the same monorepo"
+    },
+    {
+      "id": "managed-stealth",
+      "group": "Managed infrastructure",
+      "name": "Managed stealth/proxy network",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Bring an independent proxy provider using documented proxy variables",
+      "evidence": "Firecrawl Cloud proxy infrastructure is not open source"
+    },
+    {
+      "id": "managed-sla",
+      "group": "Managed infrastructure",
+      "name": "Managed scaling, SLA and support",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Operator-owned capacity, monitoring, backups and incident response",
+      "evidence": "Operational service rather than distributable source code"
+    }
+  ]
+}

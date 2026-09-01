@@ -1,0 +1,61 @@
+# Opt-in provider-neutral application PostgreSQL for authenticated/stateful APIs.
+services:
+  firecrawl-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}
+      POSTGRES_DB: firecrawl
+    volumes:
+      - firecrawl-db-data:/var/lib/postgresql/data
+      - ./community/migrations/postgres/010-prerequisites.sql:/docker-entrypoint-initdb.d/010-prerequisites.sql:ro
+      - ./community/migrations/postgres/020-current-schema.sql:/docker-entrypoint-initdb.d/020-current-schema.sql:ro
+      - ./community/migrations/postgres/030-selfhost-constraints.sql:/docker-entrypoint-initdb.d/030-selfhost-constraints.sql:ro
+      - ./community/migrations/postgres/040-selfhost-rpcs.sql:/docker-entrypoint-initdb.d/040-selfhost-rpcs.sql:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d firecrawl"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  firecrawl-db-seed:
+    image: postgres:17-alpine
+    depends_on:
+      firecrawl-db:
+        condition: service_healthy
+    environment:
+      PGHOST: firecrawl-db
+      PGUSER: postgres
+      PGPASSWORD: ${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}
+      PGDATABASE: firecrawl
+      FIRECRAWL_ORG_ID: ${FIRECRAWL_ORG_ID:?Set FIRECRAWL_ORG_ID}
+      FIRECRAWL_TEAM_ID: ${FIRECRAWL_TEAM_ID:?Set FIRECRAWL_TEAM_ID}
+      FIRECRAWL_API_KEY_UUID: ${FIRECRAWL_API_KEY_UUID:?Set FIRECRAWL_API_KEY_UUID}
+    volumes:
+      - ./community/migrations/postgres/090-seed.sql:/seed.sql:ro
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        psql
+        -v org_id="$${FIRECRAWL_ORG_ID}"
+        -v team_id="$${FIRECRAWL_TEAM_ID}"
+        -v api_key="$${FIRECRAWL_API_KEY_UUID}"
+        -f /seed.sql
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    environment:
+      USE_DB_AUTHENTICATION: "true"
+      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
+      DATABASE_REPLICA_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
+    depends_on:
+      firecrawl-db-seed:
+        condition: service_completed_successfully
+
+volumes:
+  firecrawl-db-data:

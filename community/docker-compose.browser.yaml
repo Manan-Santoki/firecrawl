@@ -1,0 +1,41 @@
+# Opt-in overlay for the community browser/interact service.
+#
+# The Firecrawl API browser routes also require USE_DB_AUTHENTICATION=true and
+# the public application database migrations. Until those portable migrations
+# are release-qualified, this overlay is intended for operators who already
+# provide that database contract.
+services:
+  api:
+    environment:
+      BROWSER_SERVICE_URL: http://browser-service-community:3006
+      BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:?Set BROWSER_SERVICE_API_KEY}
+    depends_on:
+      browser-service-community:
+        condition: service_healthy
+
+  browser-service-community:
+    build: ../apps/browser-service-community
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3006
+      BROWSER_PUBLIC_URL: ${BROWSER_PUBLIC_URL:-http://localhost:3006}
+      BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:?Set BROWSER_SERVICE_API_KEY}
+      MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_BROWSER_SESSIONS:-2}
+    ports:
+      - "${BROWSER_PORT:-3006}:3006"
+    networks:
+      - backend
+    volumes:
+      - browser-profiles:/data/profiles
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    cpus: ${BROWSER_SERVICE_CPUS:-2.0}
+    mem_limit: ${BROWSER_SERVICE_MEMORY:-4G}
+    memswap_limit: ${BROWSER_SERVICE_MEMORY:-4G}
+    restart: unless-stopped
+
+volumes:
+  browser-profiles:
