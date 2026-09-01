@@ -34,7 +34,7 @@ Until a variable is implemented and tested, it is documentation of the intended 
 
 ## Browser service
 
-The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Release evidence now covers lifecycle, Node/Python/Bash execution, CDP, Live View and scrape-bound interact/stop against an isolated staging deployment. Replay, long-running soak qualification and AI-prompt execution have separate prerequisites recorded in the capability matrix.
+The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Release evidence covers lifecycle, Node/Python/Bash execution, CDP, Live View and scrape-bound interact/stop against an isolated staging deployment. Release `community-v2.11.267.4` also passed a 30-minute concurrency-2 lifecycle soak: 112 sessions were created and closed with no transient close failures or leaked sessions. Replay and AI-prompt execution have separate prerequisites recorded in the capability matrix.
 
 For a fresh community installation, enable the portable application database and browser service together with:
 
@@ -59,3 +59,9 @@ Compatibility tests must not call Firecrawl Cloud, copy private responses, or de
 ## Hosted contract drift
 
 The scheduled compatibility workflow treats Firecrawl's hosted v2 OpenAPI as the contract source of truth and compares it with a deployed community `/openapi.json`. Operators configure that endpoint through the `COMMUNITY_OPENAPI_URL` repository variable so deployment domains remain outside this public repository. Missing hosted operations produce a retained JSON artifact and a blocking GitHub issue; additional community-only operations are reported but do not fail compatibility.
+
+## Current verified release
+
+`community-v2.11.267.4` is the current staging-verified community release. It resolves to source commit `3313474d2f6d597c963a45e1a9d43ad80ebb3876`; all five published container digests have GitHub build-provenance attestations. The release gate verified liveness, the 146-path OpenAPI document, Swagger UI, scrape, map, crawl, batch scrape and browser execution before recording the immutable staging lock.
+
+`community-v2.11.267.3` remains immutable as a failed candidate: its browser stability soak exposed process-reaping and teardown behavior that was fixed and re-qualified in `.4`. It was never promoted. Production promotion remains a separate manual operation in the private operations repository.

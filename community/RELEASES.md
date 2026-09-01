@@ -1,5 +1,13 @@
 # Community release and promotion policy
 
+## Current release status
+
+- **Verified:** `community-v2.11.267.4` at source commit `3313474d2f6d597c963a45e1a9d43ad80ebb3876`.
+- **Published artifacts:** API, Playwright, NuQ PostgreSQL, browser service and migrations images, each pinned by digest and carrying GitHub build-provenance attestations.
+- **Qualification:** authenticated compatibility smoke plus a 30-minute concurrency-2 browser soak with 112 sessions created and closed, zero transient close failures and zero leaks.
+- **Deployment scope:** isolated managed staging only. Production remains an explicit, separately audited manual promotion.
+- **Superseded candidate:** `.3` failed browser-soak qualification and was not promoted; `.4` contains the public teardown/process-lifecycle repair.
+
 ## Update classes
 
 | Class | Default action |

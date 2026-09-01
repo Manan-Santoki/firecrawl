@@ -8,10 +8,10 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 - **Source of truth:** [Firecrawl hosted v2 documentation and hosted OpenAPI](https://docs.firecrawl.dev/api-reference/v2-introduction)
 - **Hosted OpenAPI:** [v2 specification](https://docs.firecrawl.dev/api-reference/v2-openapi.json)
-- **Community release:** `community-v2.11.267.2`
-- **Test evidence ID:** `staging-audit-2026-08-31`
-- **Verified:** 2026-08-31
-- **Limitations:** Live staging evidence establishes behavior for the recorded release only. Provider-backed, managed-infrastructure and untested format variants are not inferred from route presence.
+- **Community release:** `community-v2.11.267.4`
+- **Test evidence ID:** `dokploy-staging-run-33483393087`
+- **Verified:** 2026-09-01
+- **Limitations:** Authenticated compatibility smoke and a 30-minute browser lifecycle soak establish behavior for the recorded release only. Provider-backed, managed-infrastructure and untested format variants are not inferred from route presence.
 
 | Status | Meaning |
 | --- | --- |
@@ -53,7 +53,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Interactive browser sessions | Yes | Available | Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL | Staging create, list, Node, Python, Bash, CDP, execute, delete and scrape-bound interact/stop all passed |
+| Interactive browser sessions | Yes | Available | Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL | Staging create, list, Node, Python, Bash, CDP, execute, delete and scrape-bound interact/stop passed; the 30-minute concurrency-2 soak created and closed 112 sessions with zero transient close failures or leaks |
 | Browser live view | Yes | Available | TLS route to the community browser service | Staging returned Live View and Interactive Live View URLs and the Live View page returned HTTP 200 |
 | Browser session replay | Yes | Planned | Durable recording artifacts and retention policy | Recording endpoints intentionally return a documented unsupported response |
 | Natural-language browser execution | Yes | Configurable | Community browser service plus a supported generative AI provider | Direct code execution passed; prompt execution reported the missing Google Generative AI credential |
