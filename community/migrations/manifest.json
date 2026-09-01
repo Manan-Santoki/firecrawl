@@ -17,7 +17,7 @@
       "version": "010-prerequisites",
       "description": "PostgreSQL extensions and community organization prerequisite",
       "file": "postgres/010-prerequisites.sql",
-      "sha256": "24e1f78159f94b82122b0c2842a8945b0345eae5be9f453a128ee74a947088ee",
+      "sha256": "4b66a0c693db30e96947ad6b27f968c4585db23afe90461b03f62e88daa6c884",
       "transactional": true,
       "irreversible": false
     },
@@ -25,7 +25,7 @@
       "version": "020-current-schema",
       "description": "Current public application schema",
       "file": "postgres/020-current-schema.sql",
-      "sha256": "bc1215140a9142c528e3afe9918923db6eb3a9a6b7c2e59178c8b4920264ed89",
+      "sha256": "fbea05b4b70ff731c48455a2e7ea25dda0f7b77f42381413fcd71a8730399175",
       "transactional": true,
       "irreversible": false
     },
@@ -33,7 +33,7 @@
       "version": "030-selfhost-constraints",
       "description": "Standalone constraints and indexes",
       "file": "postgres/030-selfhost-constraints.sql",
-      "sha256": "540be0d954e3a6e587d5dff3ae77a951396e0fc4a834249e3155eec3e080b230",
+      "sha256": "46c468a3eeca1d2ffd42821b26402e47319cabbeb780bb85be842fb005c1ec5e",
       "transactional": true,
       "irreversible": false
     },
@@ -41,7 +41,7 @@
       "version": "040-selfhost-rpcs",
       "description": "Provider-neutral API database functions",
       "file": "postgres/040-selfhost-rpcs.sql",
-      "sha256": "f5234c9b8236f08489ce5d517c6e172c12175c5c6ad31f74359382e71843657b",
+      "sha256": "b58db0138e9cdb88530667ed4176375a998f2a789fd480c986def46e81553ff4",
       "transactional": true,
       "irreversible": false
     }

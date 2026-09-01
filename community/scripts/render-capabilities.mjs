@@ -130,7 +130,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rendered = render(loadManifest());
   if (process.argv.includes("--check")) {
     const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : "";
-    if (current !== rendered) {
+    const canonicalCurrent = current.replace(/\r\n?/g, "\n");
+    if (canonicalCurrent !== rendered) {
       console.error("COMMUNITY_FEATURES.md is stale. Run: node community/scripts/render-capabilities.mjs");
       process.exit(1);
     }

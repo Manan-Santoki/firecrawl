@@ -24,6 +24,26 @@ test("the checked-in manifest discovers every numbered SQL file and verifies che
   ]);
 });
 
+test("migration checksums are portable across LF and CRLF checkouts", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "firecrawl-migrations-crlf-"));
+  await mkdir(path.join(directory, "postgres"));
+  const canonicalSql = "SELECT 1;\nSELECT 2;\n";
+  await writeFile(path.join(directory, "postgres", "010-one.sql"), canonicalSql.replaceAll("\n", "\r\n"));
+  await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
+    formatVersion: 1,
+    advisoryLockName: "test",
+    migrations: [{
+      version: "010-one",
+      description: "portable line endings",
+      file: "postgres/010-one.sql",
+      sha256: createHash("sha256").update(canonicalSql).digest("hex"),
+      transactional: true,
+      irreversible: false,
+    }],
+  }));
+  await assert.doesNotReject(loadManifest(path.join(directory, "manifest.json")));
+});
+
 test("apply SQL holds one advisory lock and wraps transactional migrations", async () => {
   const manifest = await loadManifest();
   const sql = buildApplySql(manifest);

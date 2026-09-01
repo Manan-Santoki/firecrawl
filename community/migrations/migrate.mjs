@@ -61,7 +61,11 @@ export function connectionEnvironment(environment = process.env) {
 }
 
 async function sha256(file) {
-  return createHash("sha256").update(await readFile(file)).digest("hex");
+  // SQL line endings are not semantic, and Git may check files out as CRLF on
+  // Windows. Hash the canonical LF representation so one manifest is portable
+  // across operator hosts and Linux release containers.
+  const canonical = (await readFile(file, "utf8")).replace(/\r\n?/g, "\n");
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 export async function loadManifest(manifestPath = path.join(moduleDirectory, "manifest.json")) {

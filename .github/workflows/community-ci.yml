@@ -112,7 +112,7 @@ jobs:
             exit 1
           fi
           docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -v ON_ERROR_STOP=1 -c \
-            "UPDATE public.schema_migrations SET checksum_sha256 = '24e1f78159f94b82122b0c2842a8945b0345eae5be9f453a128ee74a947088ee' WHERE version = '010-prerequisites'"
+            "UPDATE public.schema_migrations SET checksum_sha256 = '4b66a0c693db30e96947ad6b27f968c4585db23afe90461b03f62e88daa6c884' WHERE version = '010-prerequisites'"
       - name: Verify authenticated and browser schema
         env:
           POSTGRES_ID: ${{ job.services.postgres.id }}
