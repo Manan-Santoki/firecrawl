@@ -26,48 +26,126 @@ jobs:
       - name: Fetch canonical upstream
         run: |
           git remote add canonical https://github.com/firecrawl/firecrawl.git
-          git fetch canonical main --tags --force
-      - name: Update exact upstream mirror branch
-        run: |
-          git fetch origin upstream:refs/remotes/origin/upstream || true
-          git push origin canonical/main:refs/heads/upstream --force-with-lease
-      - name: Resolve upstream release
+          git fetch canonical --force --prune \
+            main:refs/remotes/canonical/main \
+            'refs/tags/v*:refs/tags/canonical/v*'
+      - name: Resolve exact upstream release tag
         id: release
         shell: bash
         run: |
-          tag="$(git tag --merged canonical/main --sort=-version:refname | head -n 1)"
-          if [[ -z "${tag}" ]]; then tag="sha-$(git rev-parse --short canonical/main)"; fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "branch=sync/upstream-${tag}" >> "${GITHUB_OUTPUT}"
+          tag_ref="$(git for-each-ref --sort=-version:refname --format='%(refname)' \
+            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          if [[ -z "${tag_ref}" ]]; then
+            echo "Canonical upstream has no semantic release tag. Refusing to label main as a release."
+            exit 1
+          fi
+          tag="${tag_ref##*/}"
+          source_sha="$(git rev-parse "${tag_ref}^{commit}")"
+          if ! git merge-base --is-ancestor "${source_sha}" refs/remotes/canonical/main; then
+            echo "Canonical tag ${tag} is not reachable from canonical main. Refusing release automation."
+            exit 1
+          fi
+          {
+            echo "tag=${tag}"
+            echo "source_sha=${source_sha}"
+            echo "branch=sync/upstream-${tag}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Update immutable upstream release mirror
+        env:
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+        run: |
+          git fetch origin upstream:refs/remotes/origin/upstream || true
+          git push origin "${SOURCE_SHA}:refs/heads/upstream" --force-with-lease
+      - name: Classify semantic and source risk
+        id: risk
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+        shell: bash
+        run: |
+          previous=""
+          previous_ref=""
+          while IFS= read -r candidate_ref; do
+            if git merge-base --is-ancestor "${candidate_ref}^{commit}" origin/main; then
+              previous="${candidate_ref##*/}"
+              previous_ref="${candidate_ref}"
+              break
+            fi
+          done < <(git for-each-ref --sort=-version:refname --format='%(refname)' \
+            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$')
+          release_class="major"
+          manual="true"
+          high_risk="false"
+          if [[ -n "${previous}" ]]; then
+            IFS=. read -r previous_major previous_minor _ <<< "${previous#v}"
+            IFS=. read -r target_major target_minor _ <<< "${TAG#v}"
+            if (( target_major == previous_major && target_minor == previous_minor )); then
+              release_class="patch"
+              manual="false"
+            elif (( target_major == previous_major )); then
+              release_class="minor"
+            fi
+            changed="$(git diff --name-only "${previous_ref}^{commit}" "${SOURCE_SHA}")"
+            if grep -Eiq '(^|/)(migrations?|db|auth|billing|credit|rate[^/]*|queue|nuq|browser)(/|[._-])' <<< "${changed}"; then
+              high_risk="true"
+              manual="true"
+            fi
+          fi
+          {
+            echo "previous=${previous:-none}"
+            echo "release_class=${release_class}"
+            echo "high_risk=${high_risk}"
+            echo "manual=${manual}"
+          } >> "${GITHUB_OUTPUT}"
       - name: Create sync branch
         id: merge
         env:
           BRANCH: ${{ steps.release.outputs.branch }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
+            echo "updated=false" >> "${GITHUB_OUTPUT}"
+            echo "conflict=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           git checkout -B "${BRANCH}" origin/main
-          if ! git merge --no-edit canonical/main; then
+          if ! git merge --no-edit "${SOURCE_SHA}"; then
             git merge --abort
             echo "conflict=true" >> "${GITHUB_OUTPUT}"
+            echo "updated=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           git push --force-with-lease origin "${BRANCH}"
           echo "conflict=false" >> "${GITHUB_OUTPUT}"
+          echo "updated=true" >> "${GITHUB_OUTPUT}"
       - name: Open or reuse sync pull request
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.conflict == 'false' && steps.merge.outputs.updated == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.release.outputs.branch }}
           TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          PREVIOUS: ${{ steps.risk.outputs.previous }}
+          RELEASE_CLASS: ${{ steps.risk.outputs.release_class }}
+          HIGH_RISK: ${{ steps.risk.outputs.high_risk }}
+          MANUAL: ${{ steps.risk.outputs.manual }}
         run: |
+          gh label create upstream-sync --color 1D76DB --description "Automated exact-tag upstream synchronization" --force
           existing="$(gh pr list --head "${BRANCH}" --base main --json number --jq '.[0].number // empty')"
           if [[ -z "${existing}" ]]; then
-            gh pr create --base main --head "${BRANCH}" --title "sync: upstream ${TAG}" --body "Automated merge of public upstream Firecrawl. Required community checks gate this merge; staging gates deployment."
+            body="Automated merge of exact public upstream tag ${TAG} at ${SOURCE_SHA}. Previous release: ${PREVIOUS}. Semver class: ${RELEASE_CLASS}. High-risk paths changed: ${HIGH_RISK}. Manual review required: ${MANUAL}. Required community checks gate this merge; staging gates deployment."
+            gh pr create --base main --head "${BRANCH}" --title "sync: upstream ${TAG}" --label upstream-sync --body "${body}"
             existing="$(gh pr list --head "${BRANCH}" --base main --json number --jq '.[0].number')"
           fi
-          gh pr merge "${existing}" --auto --merge --delete-branch
+          if [[ "${MANUAL}" == "true" ]]; then
+            gh label create manual-release-review --color B60205 --description "Manual approval required before merge and deployment" --force
+            gh pr edit "${existing}" --add-label manual-release-review
+          else
+            gh pr merge "${existing}" --auto --merge --delete-branch
+          fi
       - name: Report merge conflict
         if: steps.merge.outputs.conflict == 'true'
         env:

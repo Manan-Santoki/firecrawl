@@ -12,7 +12,7 @@ SET org_id = EXCLUDED.org_id,
     updated_at = now();
 
 INSERT INTO public.api_keys (key, name, team_id)
-VALUES (:'api_key'::uuid, 'Dokploy production', :'team_id'::uuid)
+VALUES (:'api_key'::uuid, 'Self-hosted API key', :'team_id'::uuid)
 ON CONFLICT (key) DO UPDATE
 SET team_id = EXCLUDED.team_id,
     name = EXCLUDED.name;

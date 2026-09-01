@@ -8,10 +8,6 @@ services:
       POSTGRES_DB: firecrawl
     volumes:
       - firecrawl-db-data:/var/lib/postgresql/data
-      - ./community/migrations/postgres/010-prerequisites.sql:/docker-entrypoint-initdb.d/010-prerequisites.sql:ro
-      - ./community/migrations/postgres/020-current-schema.sql:/docker-entrypoint-initdb.d/020-current-schema.sql:ro
-      - ./community/migrations/postgres/030-selfhost-constraints.sql:/docker-entrypoint-initdb.d/030-selfhost-constraints.sql:ro
-      - ./community/migrations/postgres/040-selfhost-rpcs.sql:/docker-entrypoint-initdb.d/040-selfhost-rpcs.sql:ro
     networks:
       - backend
     healthcheck:
@@ -20,11 +16,28 @@ services:
       timeout: 5s
       retries: 20
 
-  firecrawl-db-seed:
-    image: postgres:17-alpine
+  firecrawl-db-migrate:
+    build:
+      context: ./community/migrations
     depends_on:
       firecrawl-db:
         condition: service_healthy
+    environment:
+      PGHOST: firecrawl-db
+      PGUSER: postgres
+      PGPASSWORD: ${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}
+      PGDATABASE: firecrawl
+      ALLOW_IRREVERSIBLE_MIGRATIONS: ${ALLOW_IRREVERSIBLE_MIGRATIONS:-false}
+    command: ["adopt", "--baseline-through", "040-selfhost-rpcs"]
+    networks:
+      - backend
+    restart: "no"
+
+  firecrawl-db-seed:
+    image: postgres:17-alpine
+    depends_on:
+      firecrawl-db-migrate:
+        condition: service_completed_successfully
     environment:
       PGHOST: firecrawl-db
       PGUSER: postgres
@@ -51,8 +64,8 @@ services:
   api:
     environment:
       USE_DB_AUTHENTICATION: "true"
-      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
-      DATABASE_REPLICA_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
+      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD_URLENCODED:?Set APP_POSTGRES_PASSWORD_URLENCODED}@firecrawl-db:5432/firecrawl
+      DATABASE_REPLICA_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD_URLENCODED:?Set APP_POSTGRES_PASSWORD_URLENCODED}@firecrawl-db:5432/firecrawl
     depends_on:
       firecrawl-db-seed:
         condition: service_completed_successfully

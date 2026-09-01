@@ -1,13 +1,24 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "distribution": "community",
   "upstream": "firecrawl/firecrawl",
+  "evidence": {
+    "sourceOfTruth": "Firecrawl hosted v2 documentation and hosted OpenAPI",
+    "sourceUrl": "https://docs.firecrawl.dev/api-reference/v2-introduction",
+    "hostedOpenApiUrl": "https://docs.firecrawl.dev/api-reference/v2-openapi.json",
+    "communityRelease": "community-v2.11.267.2",
+    "testId": "staging-audit-2026-08-31",
+    "verifiedAt": "2026-08-31",
+    "limitations": "Live staging evidence establishes behavior for the recorded release only. Provider-backed, managed-infrastructure and untested format variants are not inferred from route presence."
+  },
   "statusDefinitions": {
     "available": "Runs entirely from code and services published in this repository.",
     "configurable": "Works when an operator supplies a documented third-party or local provider.",
+    "partial": "A useful subset is release-qualified, but the hosted behavior or format matrix is incomplete.",
     "planned": "A provider-neutral community implementation is planned but not yet release-qualified.",
     "unavailable": "Depends on a service or contract that is not publicly distributable.",
-    "verification-needed": "Public code exists, but the community distribution has not completed a release-grade compatibility test."
+    "verification-needed": "Public code exists, but the community distribution has not completed a release-grade compatibility test.",
+    "managed-service-only": "This is an operated Cloud service guarantee rather than a distributable API implementation."
   },
   "capabilities": [
     {
@@ -53,7 +64,7 @@
       "cloud": true,
       "community": "configurable",
       "requirements": "SearXNG or another supported search provider",
-      "evidence": "Self-host CI runs the SearXNG path"
+      "evidence": "Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified"
     },
     {
       "id": "extract",
@@ -74,6 +85,15 @@
       "evidence": "AI-gated scrape format snips"
     },
     {
+      "id": "ai-formats",
+      "group": "AI",
+      "name": "Summary, question and highlights formats",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "A correctly configured supported AI provider and model",
+      "evidence": "Staging returned provider errors because no compatible AI provider was configured"
+    },
+    {
       "id": "agent",
       "group": "AI",
       "name": "Autonomous Agent API",
@@ -83,22 +103,40 @@
       "evidence": "Release qualification not yet complete"
     },
     {
+      "id": "research-index",
+      "group": "Discovery",
+      "name": "Research Index",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Provider-neutral research corpus, ingestion and retrieval service",
+      "evidence": "Staging returns HTTP 404 because RESEARCH_PROXY_URL is not configured"
+    },
+    {
+      "id": "developer-index",
+      "group": "Discovery",
+      "name": "Developer Index",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Self-managed repository corpus plus keyword and vector index",
+      "evidence": "Staging returns HTTP 404 because the index database/provider is unavailable"
+    },
+    {
       "id": "browser-interact",
       "group": "Browser",
       "name": "Interactive browser sessions",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "available",
       "requirements": "Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL",
-      "evidence": "Node, Bash, Python, CDP, lifecycle and container contract tests pass; staging soak remains"
+      "evidence": "Staging create, list, Node, Python, Bash, CDP, execute, delete and scrape-bound interact/stop all passed"
     },
     {
       "id": "browser-live-view",
       "group": "Browser",
       "name": "Browser live view",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "available",
       "requirements": "TLS route to the community browser service",
-      "evidence": "Authenticated live screencast viewer implemented; staging soak remains"
+      "evidence": "Staging returned Live View and Interactive Live View URLs and the Live View page returned HTTP 200"
     },
     {
       "id": "browser-replay",
@@ -110,22 +148,40 @@
       "evidence": "Recording endpoints intentionally return a documented unsupported response"
     },
     {
+      "id": "browser-ai-prompts",
+      "group": "Browser",
+      "name": "Natural-language browser execution",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "Community browser service plus a supported generative AI provider",
+      "evidence": "Direct code execution passed; prompt execution reported the missing Google Generative AI credential"
+    },
+    {
       "id": "actions",
       "group": "Browser",
       "name": "Scrape actions",
       "cloud": true,
-      "community": "available",
-      "requirements": "Playwright service",
-      "evidence": "Action coverage in scrape snips"
+      "community": "planned",
+      "requirements": "Provider-neutral action interpreter in the public Playwright/browser service",
+      "evidence": "Live staging request returned HTTP 400 and explicitly required private Fire Engine"
+    },
+    {
+      "id": "screenshots-branding",
+      "group": "Browser",
+      "name": "Automatic screenshots and branding extraction",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Public rendering implementation replacing the Fire Engine dependency",
+      "evidence": "Staging screenshot returned an unsupported-engine warning and branding returned HTTP 500"
     },
     {
       "id": "parse",
       "group": "Documents",
       "name": "Parse documents and uploads",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "partial",
       "requirements": "Local upload storage plus publicly available parsers",
-      "evidence": "Self-host upload-ref coverage exists; format parity remains under audit"
+      "evidence": "A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified"
     },
     {
       "id": "media",
@@ -146,22 +202,31 @@
       "evidence": "Webhook snips and SELF_HOSTED_WEBHOOK_URL support"
     },
     {
+      "id": "support-api",
+      "group": "Operations",
+      "name": "Support Ask and documentation search",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Independent support/search backend rather than Firecrawl's SUPPORT_AGENT_URL",
+      "evidence": "Staging returns HTTP 503 because the Cloud support backend is absent"
+    },
+    {
       "id": "monitoring-api",
       "group": "Operations",
       "name": "Website monitoring API",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "partial",
       "requirements": "Persistent application database and monitoring worker",
-      "evidence": "Routes and worker are public; community production contract is under audit"
+      "evidence": "Staging create, run, completed-check and delete lifecycle passed; email and Slack notification providers were not configured"
     },
     {
       "id": "change-tracking",
       "group": "Operations",
       "name": "Change tracking",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "partial",
       "requirements": "Persistent application database and object storage",
-      "evidence": "Public route support exists; retention and migration coverage is incomplete"
+      "evidence": "Two identical staging scrapes both returned new, proving snapshot persistence is not release-qualified"
     },
     {
       "id": "api-auth",
@@ -175,11 +240,11 @@
     {
       "id": "rate-limits",
       "group": "Platform",
-      "name": "Operator-controlled rate limits",
+      "name": "Unlimited self-host access",
       "cloud": true,
       "community": "available",
-      "requirements": "Portable self-host authentication RPCs; operator owns capacity controls",
-      "evidence": "selfhost_unlimited_rate_limit_flags database contract"
+      "requirements": "Portable self-host authentication RPCs; infrastructure capacity remains operator-owned",
+      "evidence": "selfhost_unlimited_rate_limit_flags explicitly disables Cloud plan throttles; configurable per-team policies are not yet implemented"
     },
     {
       "id": "billing",
@@ -189,6 +254,15 @@
       "community": "configurable",
       "requirements": "Portable no-op adapter by default; replace with an operator-owned metering adapter when required",
       "evidence": "bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing"
+    },
+    {
+      "id": "cloud-usage",
+      "group": "Platform",
+      "name": "Cloud credit and token usage reporting",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Operator-owned metering implementation",
+      "evidence": "Staging Cloud usage endpoints return HTTP 500 while self-host billing is intentionally a no-op"
     },
     {
       "id": "mcp",
@@ -202,11 +276,11 @@
     {
       "id": "sdks",
       "group": "Clients",
-      "name": "Official SDK compatibility",
+      "name": "Official SDK base-URL compatibility",
       "cloud": true,
       "community": "available",
       "requirements": "Override the SDK API URL with the self-host endpoint",
-      "evidence": "SDKs are maintained in the same monorepo"
+      "evidence": "SDK transport and authentication work against the self-host URL; individual API feature availability follows this matrix"
     },
     {
       "id": "managed-stealth",
@@ -218,11 +292,20 @@
       "evidence": "Firecrawl Cloud proxy infrastructure is not open source"
     },
     {
+      "id": "cloud-dashboard-security",
+      "group": "Managed infrastructure",
+      "name": "Cloud dashboard and enterprise security controls",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Community operator UI plus provider-neutral SSO, audit, SIEM, IP/key and threat-policy enforcement",
+      "evidence": "Swagger documents the API only; hosted dashboard, SSO, SIEM and threat protection are not configured on staging"
+    },
+    {
       "id": "managed-sla",
       "group": "Managed infrastructure",
       "name": "Managed scaling, SLA and support",
       "cloud": true,
-      "community": "unavailable",
+      "community": "managed-service-only",
       "requirements": "Operator-owned capacity, monitoring, backups and incident response",
       "evidence": "Operational service rather than distributable source code"
     }

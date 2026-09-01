@@ -5,7 +5,6 @@ on:
     workflows: ["Community CI"]
     branches: [main]
     types: [completed]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,20 +18,36 @@ jobs:
   tag:
     if: >-
       github.repository == 'Manan-Santoki/firecrawl' &&
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+      - name: Verify this is still the tested main commit
+        env:
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "${TESTED_SHA}"
+          test "$(git rev-parse origin/main)" = "${TESTED_SHA}"
       - name: Create the next immutable community release tag
         id: release
         run: |
           git fetch origin --tags --force
+          git remote add canonical https://github.com/firecrawl/firecrawl.git
+          git fetch canonical --force --prune 'refs/tags/v*:refs/tags/canonical/v*'
           release="$(git tag --points-at HEAD --list 'community-v*' --sort=-version:refname | head -n 1)"
           if [[ -z "${release}" ]]; then
-            upstream="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+            upstream=""
+            while IFS= read -r candidate_ref; do
+              if git merge-base --is-ancestor "${candidate_ref}^{commit}" HEAD; then
+                upstream="${candidate_ref##*/}"
+                break
+              fi
+            done < <(git for-each-ref --sort=-version:refname --format='%(refname)' \
+              'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$')
             if [[ -z "${upstream}" ]]; then
               echo "No semantic upstream release tag is reachable from main."
               exit 1
@@ -57,5 +72,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh workflow run community-release.yml
-          --ref main
+          --ref ${{ steps.release.outputs.release }}
           --field release=${{ steps.release.outputs.release }}

@@ -1,0 +1,62 @@
+{
+  "formatVersion": 1,
+  "compatibilityPolicy": "expand-only",
+  "advisoryLockName": "firecrawl-community-schema-migrations-v1",
+  "sourceSchema": {
+    "file": "../../apps/api/src/db/schema/public.ts",
+    "sha256": "5ed011f285d34fdd1ae2c7b8c6c3f69860be7c1ea759deb233d11f6c0973545c"
+  },
+  "supportFiles": [
+    "postgres/090-seed.sql"
+  ],
+  "baselineChecks": [
+    "to_regclass('public.api_keys') IS NOT NULL",
+    "to_regclass('public.teams') IS NOT NULL",
+    "to_regclass('public.browser_sessions') IS NOT NULL",
+    "to_regclass('public.monitors') IS NOT NULL",
+    "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'auth_chunk_1')",
+    "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'monitoring_claim_due_monitors')"
+  ],
+  "migrations": [
+    {
+      "version": "010-prerequisites",
+      "description": "PostgreSQL extensions and community organization prerequisite",
+      "file": "postgres/010-prerequisites.sql",
+      "sha256": "4b66a0c693db30e96947ad6b27f968c4585db23afe90461b03f62e88daa6c884",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "020-current-schema",
+      "description": "Current public application schema",
+      "file": "postgres/020-current-schema.sql",
+      "sha256": "fbea05b4b70ff731c48455a2e7ea25dda0f7b77f42381413fcd71a8730399175",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "030-selfhost-constraints",
+      "description": "Standalone constraints and indexes",
+      "file": "postgres/030-selfhost-constraints.sql",
+      "sha256": "46c468a3eeca1d2ffd42821b26402e47319cabbeb780bb85be842fb005c1ec5e",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "040-selfhost-rpcs",
+      "description": "Provider-neutral API database functions",
+      "file": "postgres/040-selfhost-rpcs.sql",
+      "sha256": "b58db0138e9cdb88530667ed4176375a998f2a789fd480c986def46e81553ff4",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "050-revoke-public-rpc-execute",
+      "description": "Restrict application RPC execution to the owning database role",
+      "file": "postgres/050-revoke-public-rpc-execute.sql",
+      "sha256": "edcef0d19c70d29247e73034ea3f563558a09a29df96d50047e62ce687854d10",
+      "transactional": true,
+      "irreversible": false
+    }
+  ]
+}
