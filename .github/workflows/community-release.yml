@@ -31,6 +31,9 @@ jobs:
           - component: nuq-postgres
             context: apps/nuq-postgres
             image: firecrawl-nuq-postgres-community
+          - component: browser
+            context: apps/browser-service-community
+            image: firecrawl-browser-community
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-qemu-action@v3

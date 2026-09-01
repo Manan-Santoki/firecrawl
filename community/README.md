@@ -32,6 +32,21 @@ The community distribution will standardize these variables as their implementat
 
 Until a variable is implemented and tested, it is documentation of the intended contract rather than a production switch. See [`COMMUNITY_FEATURES.md`](../COMMUNITY_FEATURES.md) for current evidence.
 
+## Browser service preview
+
+The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Its lifecycle and real Chromium Node/Bash paths are tested, but `/interact` remains **Planned** until portable application-database migrations and container/Python qualification are complete.
+
+Operators who already provide the application database contract can opt in with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.browser.yaml \
+  up --build
+```
+
+Set a strong `BROWSER_SERVICE_API_KEY`. If live view or external CDP access is needed, set `BROWSER_PUBLIC_URL` to the TLS endpoint that routes to browser service port `3006`; do not expose its container directly without network policy.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.

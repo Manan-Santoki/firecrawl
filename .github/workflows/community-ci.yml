@@ -46,3 +46,26 @@ jobs:
           cache-dependency-path: apps/api/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm build
+
+  browser-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/browser-service-community
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/browser-service-community/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Validate browser Compose overlay
+        env:
+          BROWSER_SERVICE_API_KEY: ci-browser-key
+        run: docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.browser.yaml config --quiet
