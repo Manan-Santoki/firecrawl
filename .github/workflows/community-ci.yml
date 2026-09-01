@@ -44,18 +44,11 @@ jobs:
         working-directory: apps/api
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
-        with:
-          version: 11.4.0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/api/pnpm-lock.yaml
-      # The API depends on its local napi-rs workspace package. Its allow-listed
-      # install script builds the native module and type declarations used by tsc.
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      # The production Dockerfile installs the pinned FoundationDB client and
+      # builds the local napi-rs package. Testing that path avoids a misleading
+      # host build with missing native headers.
+      - name: Build production API image
+        run: docker build --build-arg "GIT_SHA=${GITHUB_SHA}" --tag firecrawl-community-ci .
 
   database-contract:
     runs-on: ubuntu-latest
