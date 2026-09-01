@@ -1,0 +1,49 @@
+{
+  "formatVersion": 1,
+  "advisoryLockName": "firecrawl-community-schema-migrations-v1",
+  "supportFiles": [
+    "postgres/090-seed.sql"
+  ],
+  "baselineChecks": [
+    "to_regclass('public.api_keys') IS NOT NULL",
+    "to_regclass('public.teams') IS NOT NULL",
+    "to_regclass('public.browser_sessions') IS NOT NULL",
+    "to_regclass('public.monitors') IS NOT NULL",
+    "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'auth_chunk_1')",
+    "EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'monitoring_claim_due_monitors')"
+  ],
+  "migrations": [
+    {
+      "version": "010-prerequisites",
+      "description": "PostgreSQL extensions and community organization prerequisite",
+      "file": "postgres/010-prerequisites.sql",
+      "sha256": "24e1f78159f94b82122b0c2842a8945b0345eae5be9f453a128ee74a947088ee",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "020-current-schema",
+      "description": "Current public application schema",
+      "file": "postgres/020-current-schema.sql",
+      "sha256": "bc1215140a9142c528e3afe9918923db6eb3a9a6b7c2e59178c8b4920264ed89",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "030-selfhost-constraints",
+      "description": "Standalone constraints and indexes",
+      "file": "postgres/030-selfhost-constraints.sql",
+      "sha256": "540be0d954e3a6e587d5dff3ae77a951396e0fc4a834249e3155eec3e080b230",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "040-selfhost-rpcs",
+      "description": "Provider-neutral API database functions",
+      "file": "postgres/040-selfhost-rpcs.sql",
+      "sha256": "f5234c9b8236f08489ce5d517c6e172c12175c5c6ad31f74359382e71843657b",
+      "transactional": true,
+      "irreversible": false
+    }
+  ]
+}

@@ -50,6 +50,8 @@ Set a strong `BROWSER_SERVICE_API_KEY`. If live view or external CDP access is n
 
 The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD` and stable UUID values for `FIRECRAWL_ORG_ID`, `FIRECRAWL_TEAM_ID`, and `FIRECRAWL_API_KEY_UUID`. See [`migrations/README.md`](migrations/README.md) before applying it to an existing database.
 
+The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.
