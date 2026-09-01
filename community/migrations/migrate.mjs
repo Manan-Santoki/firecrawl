@@ -77,6 +77,7 @@ export function assertExpandOnlySql(sql, file = "migration") {
     /\bTRUNCATE\b/i,
     /\bALTER\s+TABLE[\s\S]{0,300}?\b(?:DROP|RENAME)\b/i,
     /\bALTER\s+TABLE[\s\S]{0,300}?\bALTER\s+COLUMN\b[\s\S]{0,120}?\bTYPE\b/i,
+    /\bALTER\s+TABLE[\s\S]{0,300}?\bALTER\s+COLUMN\b[\s\S]{0,120}?\bSET\s+NOT\s+NULL\b/i,
   ];
   const match = forbidden.find(pattern => pattern.test(withoutComments));
   if (match) {
@@ -84,7 +85,10 @@ export function assertExpandOnlySql(sql, file = "migration") {
   }
 }
 
-export async function loadManifest(manifestPath = path.join(moduleDirectory, "manifest.json")) {
+export async function loadManifest(
+  manifestPath = path.join(moduleDirectory, "manifest.json"),
+  { verifySourceSchema = true } = {},
+) {
   const root = path.dirname(path.resolve(manifestPath));
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   if (manifest.formatVersion !== 1 || !Array.isArray(manifest.migrations)) {
@@ -93,9 +97,21 @@ export async function loadManifest(manifestPath = path.join(moduleDirectory, "ma
   if (
     !manifest.advisoryLockName ||
     manifest.compatibilityPolicy !== "expand-only" ||
+    !manifest.sourceSchema?.file ||
+    !/^[a-f0-9]{64}$/.test(manifest.sourceSchema?.sha256 ?? "") ||
     manifest.migrations.length === 0
   ) {
-    throw new Error("Migration manifest requires an advisory lock name and migrations");
+    throw new Error("Migration manifest requires an advisory lock name, source-schema fingerprint and migrations");
+  }
+
+  if (verifySourceSchema) {
+    const sourceSchemaFile = path.resolve(root, manifest.sourceSchema.file);
+    const sourceSchemaChecksum = await sha256(sourceSchemaFile);
+    if (sourceSchemaChecksum !== manifest.sourceSchema.sha256) {
+      throw new Error(
+        `API schema source changed without a reviewed migration update: expected ${manifest.sourceSchema.sha256}, got ${sourceSchemaChecksum}`,
+      );
+    }
   }
 
   const versions = new Set();
@@ -220,12 +236,13 @@ SELECT pg_advisory_unlock(hashtextextended(${sqlLiteral(manifest.advisoryLockNam
 }
 
 export function buildBaselineSql(manifest, { through } = {}) {
-  let migrations = manifest.migrations;
-  if (through) {
-    const throughIndex = migrations.findIndex(migration => migration.version === through);
-    if (throughIndex < 0) throw new Error(`Unknown baseline-through migration: ${through}`);
-    migrations = migrations.slice(0, throughIndex + 1);
+  if (!through) {
+    throw new Error("baseline requires an explicit --baseline-through reviewed migration boundary");
   }
+  let migrations = manifest.migrations;
+  const throughIndex = migrations.findIndex(migration => migration.version === through);
+  if (throughIndex < 0) throw new Error(`Unknown baseline-through migration: ${through}`);
+  migrations = migrations.slice(0, throughIndex + 1);
   const checks = (manifest.baselineChecks ?? []).map((check, index) => `
 DO $baseline_check_${index}$
 BEGIN
@@ -247,6 +264,13 @@ ON CONFLICT (version) DO NOTHING;
   return `\\set ON_ERROR_STOP on
 SELECT pg_advisory_lock(hashtextextended(${sqlLiteral(manifest.advisoryLockName)}, 0));
 ${checks}
+DO $baseline_ledger$
+BEGIN
+  IF to_regclass('${ledgerName}') IS NOT NULL THEN
+    RAISE EXCEPTION 'baseline refuses a database that already has a migration ledger';
+  END IF;
+END
+$baseline_ledger$;
 ${ledgerSql()}
 ${checksumGuardSql(manifest.migrations)}
 BEGIN;
@@ -308,6 +332,13 @@ ORDER BY version;
 }
 
 async function assertFreshOrTracked(environment) {
+  const { hasLedger, hasApplicationSchema } = await databaseTrackingState(environment);
+  if (!hasLedger && hasApplicationSchema) {
+    throw new Error("existing application schema has no migration ledger; review it, then run baseline --confirm-existing");
+  }
+}
+
+async function databaseTrackingState(environment) {
   const output = await runPsql(`
 SELECT concat_ws(E'\\t',
   (to_regclass('${ledgerName}') IS NOT NULL)::text,
@@ -315,31 +346,46 @@ SELECT concat_ws(E'\\t',
 );
 `, environment);
   const [hasLedger, hasApplicationSchema] = output.trim().split("\t");
-  if (hasLedger !== "true" && hasApplicationSchema === "true") {
-    throw new Error("existing application schema has no migration ledger; review it, then run baseline --confirm-existing");
-  }
+  return { hasLedger: hasLedger === "true", hasApplicationSchema: hasApplicationSchema === "true" };
 }
 
-function parseArguments(argv) {
+export function adoptionPlan({ hasLedger, hasApplicationSchema }) {
+  return !hasLedger && hasApplicationSchema ? "baseline-then-apply" : "apply";
+}
+
+export function parseArguments(argv, environment = process.env) {
   const args = [...argv];
   const command = args[0] && !args[0].startsWith("--") ? args.shift() : "apply";
+  const explicitConfirmation = args.includes("--confirm-existing");
+  const environmentConfirmation = environment.COMMUNITY_MIGRATIONS_BASELINE_EXISTING === "true";
+  const baselineThroughIndex = args.indexOf("--baseline-through");
+  const baselineThrough = baselineThroughIndex >= 0
+    ? args[baselineThroughIndex + 1]
+    : environment.COMMUNITY_MIGRATIONS_BASELINE_THROUGH;
+  if ((explicitConfirmation || environmentConfirmation) && !baselineThrough) {
+    throw new Error(
+      "baseline confirmation requires --baseline-through or COMMUNITY_MIGRATIONS_BASELINE_THROUGH to pin the reviewed adoption boundary",
+    );
+  }
   const options = {
     command,
-    allowIrreversible: args.includes("--allow-irreversible") || process.env.ALLOW_IRREVERSIBLE_MIGRATIONS === "true",
-    confirmExisting: args.includes("--confirm-existing") || process.env.COMMUNITY_MIGRATIONS_BASELINE_EXISTING === "true",
-    baselineThrough: process.env.COMMUNITY_MIGRATIONS_BASELINE_THROUGH,
+    allowIrreversible: args.includes("--allow-irreversible") || environment.ALLOW_IRREVERSIBLE_MIGRATIONS === "true",
+    confirmExisting: explicitConfirmation || environmentConfirmation,
+    baselineThrough,
   };
   const manifestIndex = args.indexOf("--manifest");
   options.manifestPath = manifestIndex >= 0 ? args[manifestIndex + 1] : undefined;
-  if (!["apply", "status", "dry-run", "baseline"].includes(command)) {
+  if (!["apply", "status", "dry-run", "baseline", "adopt"].includes(command)) {
     throw new Error(`Unknown command: ${command}`);
   }
   return options;
 }
 
 export async function main(argv = process.argv.slice(2), environment = process.env) {
-  const options = parseArguments(argv);
-  const manifest = await loadManifest(options.manifestPath);
+  const options = parseArguments(argv, environment);
+  // The release image intentionally contains only the signed migration bundle.
+  // CI validates the source-schema fingerprint before publishing that image.
+  const manifest = await loadManifest(options.manifestPath, { verifySourceSchema: false });
   if (options.command === "status" || options.command === "dry-run") {
     const status = migrationStatus(manifest, await readAppliedRows(manifest, environment));
     console.log(JSON.stringify({ mode: options.command, migrations: status }, null, 2));
@@ -352,6 +398,25 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     }
     await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
     console.log("Baselined the reviewed existing-schema migrations.");
+    return;
+  }
+  if (options.command === "adopt") {
+    if (!options.baselineThrough) {
+      throw new Error("adopt requires --baseline-through or COMMUNITY_MIGRATIONS_BASELINE_THROUGH");
+    }
+    const plan = adoptionPlan(await databaseTrackingState(environment));
+    if (plan === "baseline-then-apply") {
+      if (!options.confirmExisting) {
+        throw new Error(
+          "adopt found an untracked application schema; review it, then rerun with --confirm-existing",
+        );
+      }
+      await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
+      console.log("Baselined the reviewed legacy schema before apply.");
+    }
+    await assertFreshOrTracked(environment);
+    await runPsql(buildApplySql(manifest, options), environment);
+    console.log(`Migration adoption complete (${manifest.migrations.length} known migrations).`);
     return;
   }
   if (options.confirmExisting) {

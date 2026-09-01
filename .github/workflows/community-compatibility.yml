@@ -65,7 +65,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Open or update the OpenAPI drift issue
-        if: steps.comparison.outcome == 'failure'
+        if: always() && steps.comparison.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

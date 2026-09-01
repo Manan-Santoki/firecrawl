@@ -26,17 +26,25 @@ jobs:
       - name: Fetch canonical upstream
         run: |
           git remote add canonical https://github.com/firecrawl/firecrawl.git
-          git fetch canonical main --tags --force
+          git fetch canonical --force --prune \
+            main:refs/remotes/canonical/main \
+            'refs/tags/v*:refs/tags/canonical/v*'
       - name: Resolve exact upstream release tag
         id: release
         shell: bash
         run: |
-          tag="$(git tag --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          if [[ -z "${tag}" ]]; then
+          tag_ref="$(git for-each-ref --sort=-version:refname --format='%(refname)' \
+            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          if [[ -z "${tag_ref}" ]]; then
             echo "Canonical upstream has no semantic release tag. Refusing to label main as a release."
             exit 1
           fi
-          source_sha="$(git rev-parse "${tag}^{commit}")"
+          tag="${tag_ref##*/}"
+          source_sha="$(git rev-parse "${tag_ref}^{commit}")"
+          if ! git merge-base --is-ancestor "${source_sha}" refs/remotes/canonical/main; then
+            echo "Canonical tag ${tag} is not reachable from canonical main. Refusing release automation."
+            exit 1
+          fi
           {
             echo "tag=${tag}"
             echo "source_sha=${source_sha}"
@@ -55,7 +63,16 @@ jobs:
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
         shell: bash
         run: |
-          previous="$(git tag --merged origin/main --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          previous=""
+          previous_ref=""
+          while IFS= read -r candidate_ref; do
+            if git merge-base --is-ancestor "${candidate_ref}^{commit}" origin/main; then
+              previous="${candidate_ref##*/}"
+              previous_ref="${candidate_ref}"
+              break
+            fi
+          done < <(git for-each-ref --sort=-version:refname --format='%(refname)' \
+            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$')
           release_class="major"
           manual="true"
           high_risk="false"
@@ -68,8 +85,8 @@ jobs:
             elif (( target_major == previous_major )); then
               release_class="minor"
             fi
-            changed="$(git diff --name-only "${previous}^{commit}" "${SOURCE_SHA}")"
-            if grep -Eiq '(^|/)(migrations?|db|auth|billing|credit|rate.?limit|queue|nuq|browser)(/|[._-])' <<< "${changed}"; then
+            changed="$(git diff --name-only "${previous_ref}^{commit}" "${SOURCE_SHA}")"
+            if grep -Eiq '(^|/)(migrations?|db|auth|billing|credit|rate[^/]*|queue|nuq|browser)(/|[._-])' <<< "${changed}"; then
               high_risk="true"
               manual="true"
             fi

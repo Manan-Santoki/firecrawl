@@ -81,7 +81,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | API-key authentication | Yes | Available | Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true | Portable PostgreSQL bootstrap and authenticated Compose overlay |
-| Operator-controlled rate limits | Yes | Available | Portable self-host authentication RPCs; operator owns capacity controls | selfhost_unlimited_rate_limit_flags database contract |
+| Unlimited self-host access | Yes | Available | Portable self-host authentication RPCs; infrastructure capacity remains operator-owned | selfhost_unlimited_rate_limit_flags explicitly disables Cloud plan throttles; configurable per-team policies are not yet implemented |
 | Usage metering and billing hooks | Yes | Configurable | Portable no-op adapter by default; replace with an operator-owned metering adapter when required | bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing |
 | Cloud credit and token usage reporting | Yes | Unavailable | Operator-owned metering implementation | Staging Cloud usage endpoints return HTTP 500 while self-host billing is intentionally a no-op |
 
@@ -90,7 +90,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | MCP server | Yes | Available | Firecrawl MCP client configured with the self-hosted API URL and key | MCP tools work against the deployed v2 API |
-| Official SDK compatibility | Yes | Available | Override the SDK API URL with the self-host endpoint | SDKs are maintained in the same monorepo |
+| Official SDK base-URL compatibility | Yes | Available | Override the SDK API URL with the self-host endpoint | SDK transport and authentication work against the self-host URL; individual API feature availability follows this matrix |
 
 ## Managed infrastructure
 

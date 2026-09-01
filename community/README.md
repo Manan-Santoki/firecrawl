@@ -14,7 +14,7 @@ This directory defines the provider-neutral, self-hosted distribution maintained
 - `main` is the supported community line.
 - `sync/upstream-vX.Y.Z` branches carry automated upstream merges for review.
 - `community-vX.Y.Z.N` tags identify community releases, where `X.Y.Z` is the upstream release and `N` is the community revision.
-- Patch updates may auto-promote only after CI and staging compatibility checks. Minor, major and high-risk changes require approval.
+- Patch updates may deploy automatically to isolated staging after CI. Every production promotion remains an explicit, audited manual action; minor, major and high-risk changes additionally require release review before staging.
 
 ## Configuration contract
 
@@ -46,9 +46,9 @@ docker compose \
   up --build
 ```
 
-Set a strong `BROWSER_SERVICE_API_KEY`. If live view or external CDP access is needed, set `BROWSER_PUBLIC_URL` to the TLS endpoint that routes to browser service port `3006`; do not expose its container directly without network policy.
+Set a strong `BROWSER_SERVICE_API_KEY`. The portable overlay exposes port `3006` only to the Compose network. If Live View or external CDP access is needed, attach an authenticated TLS reverse proxy to that network and set `BROWSER_PUBLIC_URL` to its public endpoint; do not publish the browser container port directly.
 
-The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD` and stable UUID values for `FIRECRAWL_ORG_ID`, `FIRECRAWL_TEAM_ID`, and `FIRECRAWL_API_KEY_UUID`. See [`migrations/README.md`](migrations/README.md) before applying it to an existing database.
+The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 3986 percent-encoded equivalent in `APP_POSTGRES_PASSWORD_URLENCODED`, and stable UUID values for `FIRECRAWL_ORG_ID`, `FIRECRAWL_TEAM_ID`, and `FIRECRAWL_API_KEY_UUID`. For URL-safe generated passwords (`A-Z`, `a-z`, `0-9`, `.`, `_`, `~`, `-`) the two password variables are identical. See [`migrations/README.md`](migrations/README.md) before applying it to an existing database.
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 

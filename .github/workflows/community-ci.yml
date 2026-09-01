@@ -33,6 +33,7 @@ jobs:
       - name: Validate authenticated browser Compose model
         env:
           APP_POSTGRES_PASSWORD: ci-postgres-password
+          APP_POSTGRES_PASSWORD_URLENCODED: ci-postgres-password
           FIRECRAWL_ORG_ID: 11111111-1111-4111-8111-111111111111
           FIRECRAWL_TEAM_ID: 22222222-2222-4222-8222-222222222222
           FIRECRAWL_API_KEY_UUID: 33333333-3333-4333-8333-333333333333
@@ -44,6 +45,7 @@ jobs:
       - name: Build browser service through the combined community stack
         env:
           APP_POSTGRES_PASSWORD: ci-postgres-password
+          APP_POSTGRES_PASSWORD_URLENCODED: ci-postgres-password
           FIRECRAWL_ORG_ID: 11111111-1111-4111-8111-111111111111
           FIRECRAWL_TEAM_ID: 22222222-2222-4222-8222-222222222222
           FIRECRAWL_API_KEY_UUID: 33333333-3333-4333-8333-333333333333
@@ -103,7 +105,7 @@ jobs:
           PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
             node community/migrations/migrate.mjs status | tee /tmp/migration-status.json
           grep -q '"state": "applied"' /tmp/migration-status.json
-          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 4
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 5
           docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -v ON_ERROR_STOP=1 -c \
             "UPDATE public.schema_migrations SET checksum_sha256 = repeat('0', 64) WHERE version = '010-prerequisites'"
           if PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
@@ -121,6 +123,62 @@ jobs:
             "SELECT CASE WHEN to_regclass('public.agent_session_settings') IS NOT NULL THEN 'ok' ELSE 'missing' END" | grep -qx ok
           docker exec "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d firecrawl -Atc \
             "SELECT team_id FROM public.auth_chunk_1('33333333-3333-4333-8333-333333333333')" | grep -qx 22222222-2222-4222-8222-222222222222
+          docker exec "${POSTGRES_ID}" psql -q -v ON_ERROR_STOP=1 -U postgres -d firecrawl -c "CREATE ROLE untrusted"
+          docker exec "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d firecrawl -Atc \
+            "SELECT has_function_privilege('untrusted', 'public.auth_chunk_1_from_team(text)', 'EXECUTE')" | grep -qx f
+      - name: Verify explicit legacy adoption and divergent-schema refusal
+        env:
+          POSTGRES_ID: ${{ job.services.postgres.id }}
+        shell: bash
+        run: |
+          docker exec "${POSTGRES_ID}" createdb -U postgres legacy
+          for migration in \
+            010-prerequisites.sql \
+            020-current-schema.sql \
+            030-selfhost-constraints.sql \
+            040-selfhost-rpcs.sql; do
+            docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d legacy \
+              < "community/migrations/postgres/${migration}"
+          done
+          printf '#!/bin/sh\nexec docker exec -i "%s" psql -U postgres -d legacy "$@"\n' \
+            "${POSTGRES_ID}" > /tmp/firecrawl-psql-legacy
+          chmod +x /tmp/firecrawl-psql-legacy
+          if PSQL_BINARY=/tmp/firecrawl-psql-legacy PGUSER=postgres PGDATABASE=legacy \
+            node community/migrations/migrate.mjs adopt --baseline-through 040-selfhost-rpcs; then
+            echo "legacy adoption unexpectedly proceeded without confirmation" >&2
+            exit 1
+          fi
+          PSQL_BINARY=/tmp/firecrawl-psql-legacy PGUSER=postgres PGDATABASE=legacy \
+            node community/migrations/migrate.mjs adopt \
+              --confirm-existing --baseline-through 040-selfhost-rpcs
+          PSQL_BINARY=/tmp/firecrawl-psql-legacy PGUSER=postgres PGDATABASE=legacy \
+            node community/migrations/migrate.mjs adopt \
+              --confirm-existing --baseline-through 040-selfhost-rpcs
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d legacy -Atc \
+            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) || ':' || count(*) FILTER (WHERE version = '050-revoke-public-rpc-execute' AND NOT baselined) FROM public.schema_migrations")" = "5:4:1"
+
+          docker exec "${POSTGRES_ID}" createdb -U postgres divergent
+          for migration in \
+            010-prerequisites.sql \
+            020-current-schema.sql \
+            030-selfhost-constraints.sql \
+            040-selfhost-rpcs.sql; do
+            docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d divergent \
+              < "community/migrations/postgres/${migration}"
+          done
+          docker exec "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d divergent -c \
+            "DROP FUNCTION public.monitoring_claim_due_monitors(text, integer, integer)"
+          printf '#!/bin/sh\nexec docker exec -i "%s" psql -U postgres -d divergent "$@"\n' \
+            "${POSTGRES_ID}" > /tmp/firecrawl-psql-divergent
+          chmod +x /tmp/firecrawl-psql-divergent
+          if PSQL_BINARY=/tmp/firecrawl-psql-divergent PGUSER=postgres PGDATABASE=divergent \
+            node community/migrations/migrate.mjs adopt \
+              --confirm-existing --baseline-through 040-selfhost-rpcs; then
+            echo "divergent schema unexpectedly passed adoption checks" >&2
+            exit 1
+          fi
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d divergent -Atc \
+            "SELECT to_regclass('public.schema_migrations') IS NULL")" = "t"
 
   browser-service:
     runs-on: ubuntu-latest

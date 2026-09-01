@@ -6,12 +6,14 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  adoptionPlan,
   buildApplySql,
   buildBaselineSql,
   assertExpandOnlySql,
   connectionEnvironment,
   loadManifest,
   migrationStatus,
+  parseArguments,
   redact,
 } from "../migrations/migrate.mjs";
 
@@ -22,6 +24,7 @@ test("the checked-in manifest discovers every numbered SQL file and verifies che
     "020-current-schema",
     "030-selfhost-constraints",
     "040-selfhost-rpcs",
+    "050-revoke-public-rpc-execute",
   ]);
 });
 
@@ -29,11 +32,14 @@ test("migration checksums are portable across LF and CRLF checkouts", async () =
   const directory = await mkdtemp(path.join(os.tmpdir(), "firecrawl-migrations-crlf-"));
   await mkdir(path.join(directory, "postgres"));
   const canonicalSql = "SELECT 1;\nSELECT 2;\n";
+  const sourceSchema = "export const schema = {};\n";
   await writeFile(path.join(directory, "postgres", "010-one.sql"), canonicalSql.replaceAll("\n", "\r\n"));
+  await writeFile(path.join(directory, "source.ts"), sourceSchema);
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
     formatVersion: 1,
     compatibilityPolicy: "expand-only",
     advisoryLockName: "test",
+    sourceSchema: { file: "source.ts", sha256: createHash("sha256").update(sourceSchema).digest("hex") },
     migrations: [{
       version: "010-one",
       description: "portable line endings",
@@ -51,6 +57,10 @@ test("expand-only migrations reject destructive schema operations", () => {
   assert.throws(() => assertExpandOnlySql("DROP TABLE jobs;", "010-drop.sql"), /expand-only/);
   assert.throws(
     () => assertExpandOnlySql("ALTER TABLE jobs RENAME COLUMN state TO status;"),
+    /expand-only/,
+  );
+  assert.throws(
+    () => assertExpandOnlySql("ALTER TABLE jobs ALTER COLUMN state SET NOT NULL;"),
     /expand-only/,
   );
 });
@@ -74,8 +84,9 @@ test("irreversible pending migrations fail closed unless explicitly allowed", as
 
 test("baseline validates fingerprints and records reviewed checksums", async () => {
   const manifest = await loadManifest();
-  const sql = buildBaselineSql(manifest);
+  const sql = buildBaselineSql(manifest, { through: "040-selfhost-rpcs" });
   assert.match(sql, /existing database does not satisfy baseline check/);
+  assert.match(sql, /baseline refuses a database that already has a migration ledger/);
   assert.match(sql, /baselined, execution_ms/);
   assert.match(sql, /true, 0/);
 });
@@ -99,18 +110,27 @@ test("status distinguishes pending, applied, baselined, and checksum mismatch", 
     { version: second.version, checksum: second.sha256, baselined: true },
     { version: third.version, checksum: "0".repeat(64), baselined: false },
   ]);
-  assert.deepEqual(status.map(item => item.state), ["applied", "baselined", "checksum-mismatch", "pending"]);
+  assert.deepEqual(status.map(item => item.state), [
+    "applied",
+    "baselined",
+    "checksum-mismatch",
+    "pending",
+    "pending",
+  ]);
 });
 
 test("manifest validation rejects checksum drift and undeclared migrations", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "firecrawl-migrations-"));
   await mkdir(path.join(directory, "postgres"));
+  const sourceSchema = "export const schema = {};\n";
+  await writeFile(path.join(directory, "source.ts"), sourceSchema);
   await writeFile(path.join(directory, "postgres", "010-one.sql"), "SELECT 1;\n");
   await writeFile(path.join(directory, "postgres", "020-unlisted.sql"), "SELECT 2;\n");
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
     formatVersion: 1,
     compatibilityPolicy: "expand-only",
     advisoryLockName: "test",
+    sourceSchema: { file: "source.ts", sha256: createHash("sha256").update(sourceSchema).digest("hex") },
     migrations: [{
       version: "010-one",
       description: "test",
@@ -141,4 +161,38 @@ test("database URLs are parsed into libpq variables and secrets are redacted", (
   assert.equal(environment.PGSSLMODE, "require");
   assert.equal(environment.DATABASE_URL, undefined);
   assert.equal(redact("failed p@ss", { PGPASSWORD: "p@ss" }), "failed [REDACTED]");
+});
+
+test("environment-driven baselining requires a fixed reviewed boundary", () => {
+  assert.throws(
+    () => parseArguments(["apply"], { COMMUNITY_MIGRATIONS_BASELINE_EXISTING: "true" }),
+    /requires --baseline-through or COMMUNITY_MIGRATIONS_BASELINE_THROUGH/,
+  );
+  const options = parseArguments(["apply"], {
+    COMMUNITY_MIGRATIONS_BASELINE_EXISTING: "true",
+    COMMUNITY_MIGRATIONS_BASELINE_THROUGH: "040-selfhost-rpcs",
+  });
+  assert.equal(options.confirmExisting, true);
+  assert.equal(options.baselineThrough, "040-selfhost-rpcs");
+});
+
+test("adoption only baselines an untracked legacy application schema", () => {
+  assert.equal(adoptionPlan({ hasLedger: false, hasApplicationSchema: false }), "apply");
+  assert.equal(adoptionPlan({ hasLedger: false, hasApplicationSchema: true }), "baseline-then-apply");
+  assert.equal(adoptionPlan({ hasLedger: true, hasApplicationSchema: true }), "apply");
+  assert.equal(
+    parseArguments(["adopt", "--baseline-through", "040-selfhost-rpcs"], {}).command,
+    "adopt",
+  );
+});
+
+test("adopt confirmation is explicit and pinned", () => {
+  const unconfirmed = parseArguments(["adopt", "--baseline-through", "040-selfhost-rpcs"], {});
+  const confirmed = parseArguments(
+    ["adopt", "--confirm-existing", "--baseline-through", "040-selfhost-rpcs"],
+    {},
+  );
+  assert.equal(unconfirmed.confirmExisting, false);
+  assert.equal(confirmed.confirmExisting, true);
+  assert.equal(confirmed.baselineThrough, "040-selfhost-rpcs");
 });

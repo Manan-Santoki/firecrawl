@@ -2,6 +2,10 @@
   "formatVersion": 1,
   "compatibilityPolicy": "expand-only",
   "advisoryLockName": "firecrawl-community-schema-migrations-v1",
+  "sourceSchema": {
+    "file": "../../apps/api/src/db/schema/public.ts",
+    "sha256": "5ed011f285d34fdd1ae2c7b8c6c3f69860be7c1ea759deb233d11f6c0973545c"
+  },
   "supportFiles": [
     "postgres/090-seed.sql"
   ],
@@ -43,6 +47,14 @@
       "description": "Provider-neutral API database functions",
       "file": "postgres/040-selfhost-rpcs.sql",
       "sha256": "b58db0138e9cdb88530667ed4176375a998f2a789fd480c986def46e81553ff4",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "050-revoke-public-rpc-execute",
+      "description": "Restrict application RPC execution to the owning database role",
+      "file": "postgres/050-revoke-public-rpc-execute.sql",
+      "sha256": "edcef0d19c70d29247e73034ea3f563558a09a29df96d50047e62ce687854d10",
       "transactional": true,
       "irreversible": false
     }

@@ -240,11 +240,11 @@
     {
       "id": "rate-limits",
       "group": "Platform",
-      "name": "Operator-controlled rate limits",
+      "name": "Unlimited self-host access",
       "cloud": true,
       "community": "available",
-      "requirements": "Portable self-host authentication RPCs; operator owns capacity controls",
-      "evidence": "selfhost_unlimited_rate_limit_flags database contract"
+      "requirements": "Portable self-host authentication RPCs; infrastructure capacity remains operator-owned",
+      "evidence": "selfhost_unlimited_rate_limit_flags explicitly disables Cloud plan throttles; configurable per-team policies are not yet implemented"
     },
     {
       "id": "billing",
@@ -276,11 +276,11 @@
     {
       "id": "sdks",
       "group": "Clients",
-      "name": "Official SDK compatibility",
+      "name": "Official SDK base-URL compatibility",
       "cloud": true,
       "community": "available",
       "requirements": "Override the SDK API URL with the self-host endpoint",
-      "evidence": "SDKs are maintained in the same monorepo"
+      "evidence": "SDK transport and authentication work against the self-host URL; individual API feature availability follows this matrix"
     },
     {
       "id": "managed-stealth",

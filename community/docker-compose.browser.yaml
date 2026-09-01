@@ -27,8 +27,8 @@ services:
       BROWSER_PUBLIC_URL: ${BROWSER_PUBLIC_URL:-http://localhost:3006}
       BROWSER_SERVICE_API_KEY: ${BROWSER_SERVICE_API_KEY:?Set BROWSER_SERVICE_API_KEY}
       MAX_CONCURRENT_SESSIONS: ${MAX_CONCURRENT_BROWSER_SESSIONS:-2}
-    ports:
-      - "${BROWSER_PORT:-3006}:3006"
+    expose:
+      - "3006"
     networks:
       - backend
     volumes:

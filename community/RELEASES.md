@@ -4,7 +4,7 @@
 
 | Class | Default action |
 | --- | --- |
-| Upstream patch release | Resolve and merge the exact semantic upstream tag commit, open a sync PR, run full community CI, deploy isolated staging, run compatibility suite, then auto-promote only when no high-risk path changed. |
+| Upstream patch release | Resolve and merge the exact semantic upstream tag commit, open a sync PR, run full community CI, deploy isolated staging, and run the compatibility suite. Production promotion is always manual. |
 | Upstream minor or major release | Resolve the exact semantic tag commit, open a sync PR carrying `manual-release-review`, and require manual approval before staging and production. |
 | Database, authentication, billing, rate-limit, queue or browser lifecycle change | Treat as high risk and require manual approval regardless of version number. |
 | Documentation-only update | Merge after static validation; no production deployment. |

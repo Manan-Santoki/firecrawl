@@ -27,8 +27,8 @@ services:
       PGUSER: postgres
       PGPASSWORD: ${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}
       PGDATABASE: firecrawl
-      COMMUNITY_MIGRATIONS_BASELINE_EXISTING: ${COMMUNITY_MIGRATIONS_BASELINE_EXISTING:-false}
       ALLOW_IRREVERSIBLE_MIGRATIONS: ${ALLOW_IRREVERSIBLE_MIGRATIONS:-false}
+    command: ["adopt", "--baseline-through", "040-selfhost-rpcs"]
     networks:
       - backend
     restart: "no"
@@ -64,8 +64,8 @@ services:
   api:
     environment:
       USE_DB_AUTHENTICATION: "true"
-      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
-      DATABASE_REPLICA_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD:?Set APP_POSTGRES_PASSWORD}@firecrawl-db:5432/firecrawl
+      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD_URLENCODED:?Set APP_POSTGRES_PASSWORD_URLENCODED}@firecrawl-db:5432/firecrawl
+      DATABASE_REPLICA_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD_URLENCODED:?Set APP_POSTGRES_PASSWORD_URLENCODED}@firecrawl-db:5432/firecrawl
     depends_on:
       firecrawl-db-seed:
         condition: service_completed_successfully
