@@ -92,6 +92,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly tombstones = new Map<string, { response: DeleteSessionResponse; expiresAt: number }>();
   private readonly deletions = new Map<string, Promise<DeleteSessionResponse>>();
+  private readonly cleanups = new Set<Promise<void>>();
   private readonly profileWriters = new Set<string>();
   private readonly now: () => number;
   private readonly tombstoneTtlMs: number;
@@ -200,7 +201,6 @@ export class SessionManager {
 
   private async finalizeDelete(session: Session): Promise<DeleteSessionResponse> {
     this.sessions.delete(session.id);
-    if (session.profileWriterId) this.profileWriters.delete(session.profileWriterId);
 
     const response: DeleteSessionResponse = {
       ok: true,
@@ -208,7 +208,20 @@ export class SessionManager {
       cleanupQueued: true,
     };
     this.tombstones.set(session.id, { response, expiresAt: this.now() + this.tombstoneTtlMs });
-    await session.runtime.close().catch(() => undefined);
+
+    // The public contract reports that cleanup was queued, so acknowledge the
+    // logical release immediately. Waiting for Chromium to exit here made the
+    // DELETE request inherit any slow browser shutdown and surface as a 502 at
+    // the API gateway even though the session slot had already been released.
+    const cleanup = session.queue
+      .catch(() => undefined)
+      .then(() => session.runtime.close())
+      .catch(() => undefined);
+    this.cleanups.add(cleanup);
+    void cleanup.finally(() => {
+      this.cleanups.delete(cleanup);
+      if (session.profileWriterId) this.profileWriters.delete(session.profileWriterId);
+    });
     return response;
   }
 
@@ -242,5 +255,6 @@ export class SessionManager {
     this.closing = true;
     clearInterval(this.sweepTimer);
     await Promise.allSettled([...this.sessions.keys()].map(id => this.delete(id)));
+    await Promise.allSettled([...this.cleanups]);
   }
 }

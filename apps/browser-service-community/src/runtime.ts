@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import vm from "node:vm";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import type {
   BrowserExecResult,
@@ -27,21 +26,32 @@ async function waitForDevToolsFile(file: string, child: ChildProcess): Promise<s
   throw new Error("Timed out waiting for Chromium DevTools endpoint");
 }
 
-function serializeResult(value: unknown): string {
-  if (value === undefined) return "undefined";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
+const RESULT_MARKER = "__FIRECRAWL_RESULT__";
+const NODE_WRAPPER = `import { chromium } from "playwright";
+const browser = await chromium.connectOverCDP(process.env.AGENT_BROWSER_CDP);
+const context = browser.contexts()[0];
+if (!context) throw new Error("Chromium did not expose a default context");
+let page = context.pages().at(-1) ?? await context.newPage();
+const source = Buffer.from(process.env.FIRECRAWL_NODE_CODE, "base64").toString("utf8");
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+try {
+  const execute = new AsyncFunction("browser", "context", "page", "Buffer", "URL", "URLSearchParams", "TextEncoder", "TextDecoder", source);
+  const value = await execute(browser, context, page, Buffer, URL, URLSearchParams, TextEncoder, TextDecoder);
+  let result;
+  if (value === undefined) result = "undefined";
+  else if (typeof value === "string") result = value;
+  else { try { result = JSON.stringify(value); } catch { result = String(value); } }
+  // The Playwright CDP connection intentionally remains open for the session,
+  // but this one-shot executor must not keep its own event loop alive.
+  process.stdout.write("\\n${RESULT_MARKER}" + result, () => process.exit(0));
+} catch (error) {
+  const message = error instanceof Error ? error.stack ?? error.message : String(error);
+  process.stderr.write(message + "\\n", () => process.exit(1));
+}`;
 
 export class PlaywrightBrowserRuntime implements BrowserRuntime {
   readonly internalCdpUrl: string;
   private closed = false;
-  private page: Page;
-  private readonly sandbox: vm.Context;
 
   private constructor(
     private readonly sessionId: string,
@@ -52,9 +62,7 @@ export class PlaywrightBrowserRuntime implements BrowserRuntime {
     private readonly userDataDir: string,
     internalCdpUrl: string,
   ) {
-    this.page = page;
     this.internalCdpUrl = internalCdpUrl;
-    this.sandbox = vm.createContext({ browser, context, page, Buffer, URL, URLSearchParams, TextEncoder, TextDecoder, setTimeout, clearTimeout });
     this.installPageGuards(page);
     context.on("page", nextPage => this.installPageGuards(nextPage));
   }
@@ -113,39 +121,54 @@ export class PlaywrightBrowserRuntime implements BrowserRuntime {
 
   async execute(language: string, code: string, timeoutSeconds: number): Promise<BrowserExecResult> {
     if (this.closed) return { stdout: "", result: "", stderr: "Browser session is closed", exitCode: 1, killed: false };
-    if (language === "node") return this.executeNode(code, timeoutSeconds);
+    if (language === "node") return this.executeNodeProcess(code, timeoutSeconds);
     if (language === "bash") return this.executeProcess(code, timeoutSeconds, false);
     if (language === "python") return this.executeProcess(code, timeoutSeconds, true);
     return { stdout: "", result: "", stderr: `Unsupported language: ${language}`, exitCode: 1, killed: false };
   }
 
-  private async executeNode(code: string, timeoutSeconds: number): Promise<BrowserExecResult> {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    this.sandbox.page = this.page;
-    this.sandbox.console = {
-      log: (...values: unknown[]) => stdout.push(values.map(String).join(" ")),
-      info: (...values: unknown[]) => stdout.push(values.map(String).join(" ")),
-      warn: (...values: unknown[]) => stderr.push(values.map(String).join(" ")),
-      error: (...values: unknown[]) => stderr.push(values.map(String).join(" ")),
-    };
+  private async executeNodeProcess(code: string, timeoutSeconds: number): Promise<BrowserExecResult> {
+    const child = spawn(process.execPath, ["--input-type=module", "--eval", NODE_WRAPPER], {
+      windowsHide: true,
+      env: {
+        ...process.env,
+        NO_COLOR: "1",
+        AGENT_BROWSER_CDP: this.internalCdpUrl,
+        AGENT_BROWSER_SESSION: this.sessionId,
+        FIRECRAWL_NODE_CODE: Buffer.from(code).toString("base64"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => (stdout += String(chunk)));
+    child.stderr.on("data", chunk => (stderr += String(chunk)));
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGKILL");
+    }, timeoutSeconds * 1_000);
+    const exitCode = await new Promise<number>(resolve => {
+      child.once("error", error => {
+        stderr += `${stderr ? "\n" : ""}${error.message}`;
+        resolve(1);
+      });
+      child.once("exit", code => resolve(code ?? (killed ? 124 : 1)));
+    });
+    clearTimeout(timer);
 
-    try {
-      const script = new vm.Script(`(async () => {\n${code}\n})()`, { filename: `browser-${this.sessionId}.mjs` });
-      const execution = Promise.resolve(script.runInContext(this.sandbox, { timeout: timeoutSeconds * 1_000 }));
-      const result = await Promise.race([
-        execution,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("__FIRECRAWL_TIMEOUT__")), timeoutSeconds * 1_000)),
-      ]);
-      if (this.sandbox.page && this.sandbox.page !== this.page) this.page = this.sandbox.page as Page;
-      return { stdout: stdout.join("\n"), result: serializeResult(result), stderr: stderr.join("\n"), exitCode: 0, killed: false };
-    } catch (error) {
-      if (error instanceof Error && error.message === "__FIRECRAWL_TIMEOUT__") {
-        await this.close();
-        return { stdout: stdout.join("\n"), result: "", stderr: "Execution timed out; browser session was terminated", exitCode: 124, killed: true };
-      }
-      return { stdout: stdout.join("\n"), result: "", stderr: [stderr.join("\n"), error instanceof Error ? error.stack ?? error.message : String(error)].filter(Boolean).join("\n"), exitCode: 1, killed: false };
+    let result = "";
+    const markerIndex = stdout.lastIndexOf(RESULT_MARKER);
+    if (markerIndex >= 0) {
+      result = stdout.slice(markerIndex + RESULT_MARKER.length).trim();
+      stdout = stdout.slice(0, markerIndex).trimEnd();
     }
+    if (killed) {
+      stderr = [stderr.trimEnd(), "Execution timed out; browser session command was terminated"]
+        .filter(Boolean)
+        .join("\n");
+    }
+    return { stdout: stdout.trimEnd(), result, stderr: stderr.trimEnd(), exitCode, killed };
   }
 
   private async executeProcess(code: string, timeoutSeconds: number, python: boolean): Promise<BrowserExecResult> {
@@ -201,7 +224,13 @@ export class PlaywrightBrowserRuntime implements BrowserRuntime {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    await this.browser.close().catch(() => undefined);
+    // CDP shutdown can stall while Chromium is under memory or I/O pressure.
+    // Give it a short graceful window, then kill the owned process so queued
+    // cleanup cannot retain a browser slot indefinitely.
+    await Promise.race([
+      this.browser.close().catch(() => undefined),
+      delay(2_000),
+    ]);
     if (this.child.exitCode === null) this.child.kill("SIGKILL");
     if (!this.userDataDir.startsWith(path.join(tmpdir(), "fc-browser-"))) return;
     await rm(this.userDataDir, { recursive: true, force: true }).catch(() => undefined);
