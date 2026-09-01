@@ -4,6 +4,11 @@ on:
   push:
     tags: ["community-v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Immutable community release tag to build
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,7 +40,26 @@ jobs:
             context: apps/browser-service-community
             image: firecrawl-browser-community
     steps:
+      - name: Resolve immutable release
+        id: release
+        env:
+          DISPATCH_RELEASE: ${{ inputs.release }}
+        run: |
+          release="${DISPATCH_RELEASE:-${GITHUB_REF_NAME}}"
+          if [[ ! "${release}" =~ ^community-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid community release tag: ${release}"
+            exit 1
+          fi
+          echo "release=${release}" >> "${GITHUB_OUTPUT}"
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.release.outputs.release }}
+      - name: Resolve source commit
+        id: source
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${source_sha:0:7}" >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -49,8 +73,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
-            type=ref,event=tag
-            type=sha,prefix=sha-
+            type=raw,value=${{ steps.release.outputs.release }}
+            type=raw,value=sha-${{ steps.source.outputs.short_sha }}
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -61,6 +85,6 @@ jobs:
           provenance: mode=max
           sbom: true
           build-args: |
-            GIT_SHA=${{ github.sha }}
+            GIT_SHA=${{ steps.source.outputs.sha }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}

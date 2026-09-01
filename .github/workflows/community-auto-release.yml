@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: community-auto-release
@@ -26,25 +27,35 @@ jobs:
           ref: main
           fetch-depth: 0
       - name: Create the next immutable community release tag
+        id: release
         run: |
           git fetch origin --tags --force
-          if git tag --points-at HEAD --list 'community-v*' | grep -q .; then
-            echo "This commit already has a community release tag."
-            exit 0
-          fi
-          upstream="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
-          if [[ -z "${upstream}" ]]; then
-            echo "No semantic upstream release tag is reachable from main."
-            exit 1
-          fi
-          previous="$(git tag --list "community-${upstream}.*" --sort=-version:refname | head -n 1)"
-          if [[ -z "${previous}" ]]; then
-            revision=1
+          release="$(git tag --points-at HEAD --list 'community-v*' --sort=-version:refname | head -n 1)"
+          if [[ -z "${release}" ]]; then
+            upstream="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+            if [[ -z "${upstream}" ]]; then
+              echo "No semantic upstream release tag is reachable from main."
+              exit 1
+            fi
+            previous="$(git tag --list "community-${upstream}.*" --sort=-version:refname | head -n 1)"
+            if [[ -z "${previous}" ]]; then
+              revision=1
+            else
+              revision="$(( ${previous##*.} + 1 ))"
+            fi
+            release="community-${upstream}.${revision}"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${release}" -m "${release}"
+            git push origin "${release}"
           else
-            revision="$(( ${previous##*.} + 1 ))"
+            echo "Reusing existing release tag ${release}."
           fi
-          release="community-${upstream}.${revision}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${release}" -m "${release}"
-          git push origin "${release}"
+          echo "release=${release}" >> "${GITHUB_OUTPUT}"
+      - name: Dispatch the container build explicitly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh workflow run community-release.yml
+          --ref main
+          --field release=${{ steps.release.outputs.release }}
