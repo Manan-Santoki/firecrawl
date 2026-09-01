@@ -39,8 +39,9 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Interactive browser sessions | Yes | Planned | Community browser service wired through BROWSER_SERVICE_URL | Prototype works; lifecycle and load tests are not yet release-grade |
-| Browser live view and replay | Yes | Planned | Streaming gateway and durable session artifacts | No release-qualified community service yet |
+| Interactive browser sessions | Yes | Verification needed | Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL | Node, Bash, Python, CDP, lifecycle and container contract tests pass; staging soak remains |
+| Browser live view | Yes | Verification needed | TLS route to the community browser service | Authenticated live screencast viewer implemented; staging soak remains |
+| Browser session replay | Yes | Planned | Durable recording artifacts and retention policy | Recording endpoints intentionally return a documented unsupported response |
 | Scrape actions | Yes | Available | Playwright service | Action coverage in scrape snips |
 
 ## Documents
@@ -62,9 +63,9 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| API-key authentication | Yes | Verification needed | Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true | Existing deployment proves the path; portable migrations are being normalized |
-| Operator-controlled rate limits | Yes | Planned | SELF_HOSTED_RATE_LIMIT_MODE and Redis policy implementation | Current limits are coupled to plan metadata |
-| Usage metering and billing hooks | Yes | Planned | SELF_HOSTED_BILLING_MODE with disabled and metered adapters | Cloud Autumn integration is optional but self-host policy is not normalized |
+| API-key authentication | Yes | Available | Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true | Portable PostgreSQL bootstrap and authenticated Compose overlay |
+| Operator-controlled rate limits | Yes | Available | Portable self-host authentication RPCs; operator owns capacity controls | selfhost_unlimited_rate_limit_flags database contract |
+| Usage metering and billing hooks | Yes | Configurable | Portable no-op adapter by default; replace with an operator-owned metering adapter when required | bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing |
 
 ## Clients
 

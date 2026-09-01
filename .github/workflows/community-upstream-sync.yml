@@ -64,8 +64,10 @@ jobs:
         run: |
           existing="$(gh pr list --head "${BRANCH}" --base main --json number --jq '.[0].number // empty')"
           if [[ -z "${existing}" ]]; then
-            gh pr create --base main --head "${BRANCH}" --title "sync: upstream ${TAG}" --body "Automated merge of public upstream Firecrawl. Community CI and staging promotion remain required."
+            gh pr create --base main --head "${BRANCH}" --title "sync: upstream ${TAG}" --body "Automated merge of public upstream Firecrawl. Required community checks gate this merge; staging gates deployment."
+            existing="$(gh pr list --head "${BRANCH}" --base main --json number --jq '.[0].number')"
           fi
+          gh pr merge "${existing}" --auto --merge --delete-branch
       - name: Report merge conflict
         if: steps.merge.outputs.conflict == 'true'
         env:

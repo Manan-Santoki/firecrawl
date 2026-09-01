@@ -87,18 +87,27 @@
       "group": "Browser",
       "name": "Interactive browser sessions",
       "cloud": true,
-      "community": "planned",
-      "requirements": "Community browser service wired through BROWSER_SERVICE_URL",
-      "evidence": "Prototype works; lifecycle and load tests are not yet release-grade"
+      "community": "verification-needed",
+      "requirements": "Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL",
+      "evidence": "Node, Bash, Python, CDP, lifecycle and container contract tests pass; staging soak remains"
     },
     {
       "id": "browser-live-view",
       "group": "Browser",
-      "name": "Browser live view and replay",
+      "name": "Browser live view",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "TLS route to the community browser service",
+      "evidence": "Authenticated live screencast viewer implemented; staging soak remains"
+    },
+    {
+      "id": "browser-replay",
+      "group": "Browser",
+      "name": "Browser session replay",
       "cloud": true,
       "community": "planned",
-      "requirements": "Streaming gateway and durable session artifacts",
-      "evidence": "No release-qualified community service yet"
+      "requirements": "Durable recording artifacts and retention policy",
+      "evidence": "Recording endpoints intentionally return a documented unsupported response"
     },
     {
       "id": "actions",
@@ -159,27 +168,27 @@
       "group": "Platform",
       "name": "API-key authentication",
       "cloud": true,
-      "community": "verification-needed",
+      "community": "available",
       "requirements": "Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true",
-      "evidence": "Existing deployment proves the path; portable migrations are being normalized"
+      "evidence": "Portable PostgreSQL bootstrap and authenticated Compose overlay"
     },
     {
       "id": "rate-limits",
       "group": "Platform",
       "name": "Operator-controlled rate limits",
       "cloud": true,
-      "community": "planned",
-      "requirements": "SELF_HOSTED_RATE_LIMIT_MODE and Redis policy implementation",
-      "evidence": "Current limits are coupled to plan metadata"
+      "community": "available",
+      "requirements": "Portable self-host authentication RPCs; operator owns capacity controls",
+      "evidence": "selfhost_unlimited_rate_limit_flags database contract"
     },
     {
       "id": "billing",
       "group": "Platform",
       "name": "Usage metering and billing hooks",
       "cloud": true,
-      "community": "planned",
-      "requirements": "SELF_HOSTED_BILLING_MODE with disabled and metered adapters",
-      "evidence": "Cloud Autumn integration is optional but self-host policy is not normalized"
+      "community": "configurable",
+      "requirements": "Portable no-op adapter by default; replace with an operator-owned metering adapter when required",
+      "evidence": "bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing"
     },
     {
       "id": "mcp",

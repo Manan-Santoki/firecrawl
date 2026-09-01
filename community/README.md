@@ -36,16 +36,19 @@ Until a variable is implemented and tested, it is documentation of the intended 
 
 The provider-neutral browser service lives in [`apps/browser-service-community`](../apps/browser-service-community). Its lifecycle and real Chromium Node/Bash paths are tested, but `/interact` remains **Planned** until portable application-database migrations and container/Python qualification are complete.
 
-Operators who already provide the application database contract can opt in with:
+For a fresh community installation, enable the portable application database and browser service together with:
 
 ```bash
 docker compose \
   -f docker-compose.yaml \
+  -f community/docker-compose.auth.yaml \
   -f community/docker-compose.browser.yaml \
   up --build
 ```
 
 Set a strong `BROWSER_SERVICE_API_KEY`. If live view or external CDP access is needed, set `BROWSER_PUBLIC_URL` to the TLS endpoint that routes to browser service port `3006`; do not expose its container directly without network policy.
+
+The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD` and stable UUID values for `FIRECRAWL_ORG_ID`, `FIRECRAWL_TEAM_ID`, and `FIRECRAWL_API_KEY_UUID`. See [`migrations/README.md`](migrations/README.md) before applying it to an existing database.
 
 ## Security boundary
 
