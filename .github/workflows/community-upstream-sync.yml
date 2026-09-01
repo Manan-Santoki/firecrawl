@@ -1,0 +1,74 @@
+name: Community upstream sync
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: community-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'Manan-Santoki/firecrawl'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Fetch canonical upstream
+        run: |
+          git remote add canonical https://github.com/firecrawl/firecrawl.git
+          git fetch canonical main --tags --force
+      - name: Update exact upstream mirror branch
+        run: |
+          git fetch origin upstream:refs/remotes/origin/upstream || true
+          git push origin canonical/main:refs/heads/upstream --force-with-lease
+      - name: Resolve upstream release
+        id: release
+        shell: bash
+        run: |
+          tag="$(git tag --merged canonical/main --sort=-version:refname | head -n 1)"
+          if [[ -z "${tag}" ]]; then tag="sha-$(git rev-parse --short canonical/main)"; fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "branch=sync/upstream-${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Create sync branch
+        id: merge
+        env:
+          BRANCH: ${{ steps.release.outputs.branch }}
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH}" origin/main
+          if ! git merge --no-edit canonical/main; then
+            git merge --abort
+            echo "conflict=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git push --force-with-lease origin "${BRANCH}"
+          echo "conflict=false" >> "${GITHUB_OUTPUT}"
+      - name: Open or reuse sync pull request
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          existing="$(gh pr list --head "${BRANCH}" --base main --json number --jq '.[0].number // empty')"
+          if [[ -z "${existing}" ]]; then
+            gh pr create --base main --head "${BRANCH}" --title "sync: upstream ${TAG}" --body "Automated merge of public upstream Firecrawl. Community CI and staging promotion remain required."
+          fi
+      - name: Report merge conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: gh issue create --title "Upstream sync conflict for ${TAG}" --body "The automated upstream merge conflicted with community changes. Resolve it on a sync branch; no deployment was attempted."

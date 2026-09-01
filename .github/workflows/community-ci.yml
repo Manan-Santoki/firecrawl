@@ -1,0 +1,48 @@
+name: Community CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "sync/upstream-**", "community/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  community-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Test capability manifest tooling
+        run: node --test community/scripts/render-capabilities.test.mjs
+      - name: Verify generated feature matrix
+        run: node community/scripts/render-capabilities.mjs --check
+      - name: Validate root Compose model
+        run: docker compose -f docker-compose.yaml config --quiet
+
+  api-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/api/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build

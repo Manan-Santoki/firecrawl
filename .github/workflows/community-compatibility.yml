@@ -1,0 +1,32 @@
+name: Community compatibility report
+
+on:
+  schedule:
+    - cron: "41 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  static-contract:
+    if: github.repository == 'Manan-Santoki/firecrawl'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Validate capability contract
+        run: |
+          node --test community/scripts/render-capabilities.test.mjs
+          node community/scripts/render-capabilities.mjs --check
+      - name: Validate Compose contract
+        run: docker compose -f docker-compose.yaml config --quiet
+      - name: Open issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "Community compatibility regression $(date -u +%F)" --body "The scheduled static compatibility contract failed on ${GITHUB_SHA}. No release or production promotion should proceed until the failing capability is fixed or reclassified."
