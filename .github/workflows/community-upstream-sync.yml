@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   issues: write
@@ -111,6 +112,17 @@ jobs:
             echo "conflict=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          if git fetch origin "${BRANCH}:refs/remotes/origin/${BRANCH}" && \
+            git merge-base --is-ancestor origin/main "refs/remotes/origin/${BRANCH}" && \
+            git merge-base --is-ancestor "${SOURCE_SHA}" "refs/remotes/origin/${BRANCH}"; then
+            echo "Reusing ${BRANCH}; it already contains current main and ${SOURCE_SHA}."
+            {
+              echo "branch_sha=$(git rev-parse "refs/remotes/origin/${BRANCH}")"
+              echo "conflict=false"
+              echo "updated=true"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           git checkout -B "${BRANCH}" origin/main
           if ! git merge --no-edit "${SOURCE_SHA}"; then
             git merge --abort
@@ -119,8 +131,11 @@ jobs:
             exit 0
           fi
           git push --force-with-lease origin "${BRANCH}"
-          echo "conflict=false" >> "${GITHUB_OUTPUT}"
-          echo "updated=true" >> "${GITHUB_OUTPUT}"
+          {
+            echo "branch_sha=$(git rev-parse HEAD)"
+            echo "conflict=false"
+            echo "updated=true"
+          } >> "${GITHUB_OUTPUT}"
       - name: Open or reuse sync pull request
         if: steps.merge.outputs.conflict == 'false' && steps.merge.outputs.updated == 'true'
         env:
@@ -145,6 +160,27 @@ jobs:
             gh pr edit "${existing}" --add-label manual-release-review
           else
             gh pr merge "${existing}" --auto --merge --delete-branch
+          fi
+      - name: Ensure community checks run for the sync commit
+        if: steps.merge.outputs.conflict == 'false' && steps.merge.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+          BRANCH_SHA: ${{ steps.merge.outputs.branch_sha }}
+        shell: bash
+        run: |
+          runs="$(gh run list \
+            --workflow community-ci.yml \
+            --branch "${BRANCH}" \
+            --commit "${BRANCH_SHA}" \
+            --limit 20 \
+            --json databaseId,event,status,conclusion,headSha)"
+          should_dispatch="$(printf '%s' "${runs}" | node community/scripts/should-dispatch-ci.mjs)"
+          if [[ "${should_dispatch}" == "true" ]]; then
+            echo "No executable Community CI run exists for ${BRANCH_SHA}; dispatching one."
+            gh workflow run community-ci.yml --ref "${BRANCH}"
+          else
+            echo "Community CI already exists for ${BRANCH_SHA}; no duplicate dispatch needed."
           fi
       - name: Report merge conflict
         if: steps.merge.outputs.conflict == 'true'

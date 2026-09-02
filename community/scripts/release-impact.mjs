@@ -11,6 +11,8 @@ const releaseMetadataPaths = new Set([
   "community/scripts/release-impact.test.mjs",
   "community/scripts/select-upstream-release.mjs",
   "community/scripts/select-upstream-release.test.mjs",
+  "community/scripts/should-dispatch-ci.mjs",
+  "community/scripts/should-dispatch-ci.test.mjs",
 ]);
 
 export function normalizePath(value) {
