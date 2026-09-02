@@ -197,6 +197,10 @@ const configSchema = z.object({
   DATABASE_URL: z.string().optional(),
   DATABASE_REPLICA_URL: z.string().optional(),
   INDEX_DATABASE_URL: z.string().optional(),
+  // Pool sizing preset for this process (see db/pool-profiles.ts). Unset keeps
+  // the historical pool settings; deployments opt into `api`, `worker` or
+  // `utility` to keep connections warm within the pooler's client budget.
+  DB_POOL_PROFILE: emptyStringAsUndefined(z.enum(["api", "worker", "utility"])),
   INDEX_CACHE_REDIS_URL: z.string().optional(),
   // Negative (miss) caching TTL for index URL->id lookups, in ms. 0 disables
   // it; the cache then only shields lookups that find data. A positive value
@@ -234,6 +238,17 @@ const configSchema = z.object({
   PARSE_UPLOAD_STORAGE_DRIVER: z.enum(["local", "gcs"]).optional(),
   PARSE_UPLOAD_REF_SECRET: emptyStringAsUndefined(z.string().trim().min(1)),
   PARSE_UPLOAD_PUBLIC_BASE_URL: z.string().url().optional(),
+
+  // Cloud Bigtable (change tracking bookkeeping store). The client
+  // auto-detects BIGTABLE_EMULATOR_HOST, so local dev only needs the
+  // emulator plus these vars. BIGTABLE_CREDENTIALS mirrors
+  // GCS_CREDENTIALS: base64-encoded service-account JSON; unset falls
+  // back to Application Default Credentials.
+  BIGTABLE_PROJECT_ID: z.string().optional(),
+  BIGTABLE_INSTANCE_ID: z.string().optional(),
+  BIGTABLE_APP_PROFILE_ID: z.string().optional(),
+  BIGTABLE_CHANGE_TRACKING_TABLE: z.string().optional(),
+  BIGTABLE_CREDENTIALS: z.string().optional(),
 
   // ClickHouse (Search Analytics)
   CLICKHOUSE_ANALYTICS_URL: z.string().optional(),
