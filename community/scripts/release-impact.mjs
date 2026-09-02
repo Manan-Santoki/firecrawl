@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 const releaseMetadataPaths = new Set([
   ".github/workflows/community-auto-release.yml",
   ".github/workflows/community-ci.yml",
+  ".github/workflows/community-upstream-sync.yml",
   "community/capabilities.yml",
   "community/scripts/release-impact.mjs",
   "community/scripts/release-impact.test.mjs",
+  "community/scripts/select-upstream-release.mjs",
+  "community/scripts/select-upstream-release.test.mjs",
 ]);
 
 export function normalizePath(value) {

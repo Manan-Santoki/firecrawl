@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           tag_ref="$(git for-each-ref --sort=-version:refname --format='%(refname)' \
-            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+            'refs/tags/canonical/v*' | node community/scripts/select-upstream-release.mjs)"
           if [[ -z "${tag_ref}" ]]; then
             echo "Canonical upstream has no semantic release tag. Refusing to label main as a release."
             exit 1
