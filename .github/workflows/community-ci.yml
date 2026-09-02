@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - name: Test capability manifest and release tooling
-        run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs community/scripts/release-impact.test.mjs
+        run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs community/scripts/release-impact.test.mjs community/scripts/select-upstream-release.test.mjs
       - name: Test migration tooling
         run: node --test community/scripts/migrate.test.mjs
       - name: Verify generated feature matrix

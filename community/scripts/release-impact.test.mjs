@@ -11,8 +11,11 @@ test("documentation and release bookkeeping do not publish runtime images", () =
     "community/capabilities.yml",
     ".github/workflows/community-auto-release.yml",
     ".github/workflows/community-ci.yml",
+    ".github/workflows/community-upstream-sync.yml",
     "community/scripts/release-impact.mjs",
     "community/scripts/release-impact.test.mjs",
+    "community/scripts/select-upstream-release.mjs",
+    "community/scripts/select-upstream-release.test.mjs",
   ];
 
   assert.equal(requiresRelease(paths), false);
