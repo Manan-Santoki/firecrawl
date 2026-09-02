@@ -26,5 +26,6 @@
 5. Failure preserves the previous production digest and opens an incident issue; it never retries an unsafe migration automatically.
 6. A release name is derived only from an annotated or lightweight semantic upstream tag. The moving upstream `main` branch is never published under an older release name.
 7. The hosted-v2 OpenAPI comparison has no missing operations. Extra community administration routes are informational and must remain outside hosted namespaces.
+8. An automated sync PR must have an executable `Community CI` run for its exact head commit. Because GitHub suppresses or approval-blocks workflows created by its own token, the sync workflow explicitly dispatches the check and deduplicates it by commit SHA.
 
 The private operations repository implements the provider-specific mechanics. This public policy remains the auditable contract.
