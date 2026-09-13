@@ -12,6 +12,7 @@ env:
 
 jobs:
   test:
+    if: github.repository == 'firecrawl/firecrawl'
     name: Run tests
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:

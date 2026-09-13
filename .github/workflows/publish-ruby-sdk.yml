@@ -10,6 +10,7 @@ on:
 
 jobs:
   publish:
+    if: github.repository == 'firecrawl/firecrawl'
     name: Publish to RubyGems
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:

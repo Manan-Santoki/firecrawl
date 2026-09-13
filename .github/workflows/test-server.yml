@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   self-host:
+    if: github.repository == 'firecrawl/firecrawl'
     name: Self-hosted environment tests
     strategy:
       fail-fast: false
@@ -577,6 +578,7 @@ jobs:
   #         retention-days: 5
 
   nuq-fdb-core:
+    if: github.repository == 'firecrawl/firecrawl'
     name: NuQ FoundationDB core tests
     runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
