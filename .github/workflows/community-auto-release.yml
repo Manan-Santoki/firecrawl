@@ -57,14 +57,7 @@ jobs:
           git fetch canonical --force --prune 'refs/tags/v*:refs/tags/canonical/v*'
           release="$(git tag --points-at HEAD --list 'community-v*' --sort=-version:refname | head -n 1)"
           if [[ -z "${release}" ]]; then
-            upstream=""
-            while IFS= read -r candidate_ref; do
-              if git merge-base --is-ancestor "${candidate_ref}^{commit}" HEAD; then
-                upstream="${candidate_ref##*/}"
-                break
-              fi
-            done < <(git for-each-ref --sort=-version:refname --format='%(refname)' \
-              'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$')
+            upstream="$(node community/scripts/upstream-state.mjs HEAD | jq -r .tag)"
             if [[ -z "${upstream}" ]]; then
               echo "No semantic upstream release tag is reachable from main."
               exit 1

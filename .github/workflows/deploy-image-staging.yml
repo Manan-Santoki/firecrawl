@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   version:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -37,6 +38,7 @@ jobs:
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/firecrawl-staging" >> "$GITHUB_OUTPUT"
 
   build:
+    if: github.repository == 'firecrawl/firecrawl'
     needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -100,6 +102,7 @@ jobs:
           '
 
   publish:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     needs:
       - version

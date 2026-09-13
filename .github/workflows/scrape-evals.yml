@@ -7,14 +7,8 @@ on:
 
 jobs:
   quality-eval:
-    if: |
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request != null &&
-       (contains(github.event.comment.body, '#scrape-quality-eval') ||
-        contains(github.event.issue.title, '#scrape-quality-eval'))) ||
-      (github.event_name == 'pull_request' &&
-       (contains(github.event.pull_request.body, '#scrape-quality-eval') ||
-        contains(github.event.pull_request.title, '#scrape-quality-eval')))
+    if: >-
+      github.repository == 'firecrawl/firecrawl' && ((github.event_name == 'issue_comment' && github.event.issue.pull_request != null && (contains(github.event.comment.body, '#scrape-quality-eval') || contains(github.event.issue.title, '#scrape-quality-eval'))) || (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '#scrape-quality-eval') || contains(github.event.pull_request.title, '#scrape-quality-eval'))))
     runs-on: ubuntu-latest
     steps:
       - name: Check org membership
@@ -69,14 +63,8 @@ jobs:
             });
 
   ocr-eval:
-    if: |
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request != null &&
-       (contains(github.event.comment.body, '#scrape-ocr-eval') ||
-        contains(github.event.issue.title, '#scrape-ocr-eval'))) ||
-      (github.event_name == 'pull_request' &&
-       (contains(github.event.pull_request.body, '#scrape-ocr-eval') ||
-        contains(github.event.pull_request.title, '#scrape-ocr-eval')))
+    if: >-
+      github.repository == 'firecrawl/firecrawl' && ((github.event_name == 'issue_comment' && github.event.issue.pull_request != null && (contains(github.event.comment.body, '#scrape-ocr-eval') || contains(github.event.issue.title, '#scrape-ocr-eval'))) || (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '#scrape-ocr-eval') || contains(github.event.pull_request.title, '#scrape-ocr-eval'))))
     runs-on: ubuntu-latest
     steps:
       - name: Check org membership
