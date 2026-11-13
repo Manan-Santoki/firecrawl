@@ -12,6 +12,8 @@ Provider-neutral implementation of the private media service that upstream Firec
 | YouTube metadata and transcript markdown | `postprocessors/youtube.ts` | `POST /metadata` |
 | YouTube channel/playlist expansion in `/v2/map` | `lib/avgrab-resolve.ts`, `controllers/v2/map.ts` | `GET /supported-urls`, `POST /resolve` |
 
+Upstream only routes the `audio`/`video` formats through fire-engine engines (so browser cookies can be forwarded). This fork marks the self-hosted `playwright` and `fetch` engines as audio/video-capable when fire-engine is not configured (`apps/api/src/scraper/scrapeURL/engines/index.ts`); without that, self-hosted scrapes requesting those formats fail with an empty engine list. Requests from those engines carry no cookies.
+
 Without `AVGRAB_SERVICE_URL` the API returns a warning for `audio`/`video`, skips YouTube enrichment and uses the standard map path.
 
 ## Contract
