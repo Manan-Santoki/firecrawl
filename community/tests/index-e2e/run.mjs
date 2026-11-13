@@ -194,8 +194,13 @@ async function main() {
     const result = await api("/v2/scrape", { url: articleUrl, formats: ["markdown"], lockdown: true });
     return result.body?.data?.metadata?.cacheState === "hit" ? result : false;
   }, 60_000);
-  // maxAge: 0 indexed a newer copy, so compare with the pre-restart lockdown hit.
-  check(afterRestart.body.data.markdown === locked.body.data.markdown, "cache survives index database and storage restarts");
+  // maxAge: 0 indexes a newer copy asynchronously, and the fixture embeds the
+  // origin request number, so the newest indexed copy is either the one the
+  // pre-restart lockdown hit returned or the maxAge: 0 copy.
+  check(
+    [locked.body.data.markdown, fresh.body?.data?.markdown].includes(afterRestart.body.data.markdown),
+    "cache survives index database and storage restarts",
+  );
 
   // 6. Search excerpts from the indexed object via the highlight service.
   if (highlightCompose) {
