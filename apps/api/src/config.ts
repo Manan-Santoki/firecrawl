@@ -836,6 +836,27 @@ const configSchema = z.object({
   EXTRACT_ANCHOR_MODEL: z.string().default("openai/gpt-oss-120b"),
   EXTRACT_LIGHT_MODEL: z.string().default("openai/gpt-oss-20b"),
   CODE_SANDBOX_URL: z.string().default("ws://code-sandbox:3001"),
+
+  // Community distribution (see community/README.md). Only active with
+  // USE_DB_AUTHENTICATION=true and the community.* tables from migration
+  // 100-community-metering.
+  COMMUNITY_REQUEST_LOG_ENABLED: z.stringbool().default(true),
+  COMMUNITY_REQUEST_LOG_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30),
+  // metered: record every credit charge in community.credit_usage and enforce
+  // team/key credit limits when Firecrawl Cloud billing is not configured.
+  // disabled: no ledger, no credit limits (unlimited self-host access).
+  SELF_HOSTED_BILLING_MODE: z.enum(["disabled", "metered"]).default("metered"),
+  // Team concurrency for teams with no community.team_limits override. Unset
+  // keeps upstream's default for a team without a billing plan.
+  COMMUNITY_DEFAULT_CONCURRENCY_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
 });
 
 const validatedConfigSchema = configSchema.superRefine((value, context) => {

@@ -81,6 +81,22 @@
       "sha256": "0d1950e4d59530aa51411158bfee838a01e86a986d35afb945af43a5a320043c",
       "transactional": true,
       "irreversible": false
+    },
+    {
+      "version": "100-community-metering",
+      "description": "Community request log, credit ledger and per-team limits",
+      "file": "postgres/100-community-metering.sql",
+      "sha256": "aaf7e595d878ca7089ee55a2ddc2cd3dfeccb20624c0022c267e299be2ec7266",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "110-dashboard-schema",
+      "description": "Community operator dashboard accounts, invitations and audit log",
+      "file": "postgres/110-dashboard-schema.sql",
+      "sha256": "ecfc83eb7f2b037a57101ae0928ffa6bebca77c95bd04cc91b887b900de680a6",
+      "transactional": true,
+      "irreversible": false
     }
   ]
 }
