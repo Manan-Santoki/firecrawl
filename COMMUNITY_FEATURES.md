@@ -67,6 +67,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | Parse documents and uploads | Yes | Partial | Local upload storage plus publicly available parsers | A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified |
+| PII redaction (redactPII) | Yes | Verification needed | Community privacy service (Presidio and spaCy, CPU) via community/docker-compose.privacy.yaml and FIRE_PRIVACY_URL | The /redact contract is covered by service unit tests and a black-box test that ports the API client's response handling; no end-to-end scrape with redactPII has been release-qualified. Detection is Presidio patterns plus spaCy NER rather than the hosted model, so recall and precision differ from Cloud |
 | Audio and video extraction | Yes | Planned | Provider-neutral replacement for AVGRAB_SERVICE_URL | No release-qualified community service yet |
 
 ## Operations

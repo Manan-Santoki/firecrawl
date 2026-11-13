@@ -1,0 +1,7 @@
+# Runtime dependencies (all open source: MIT / Apache-2.0 / BSD).
+# The spaCy English model is installed separately in the Dockerfile with a
+# pinned SHA-256 checksum.
+fastapi==0.162.7
+uvicorn==0.54.0
+presidio-analyzer==2.2.366
+spacy==3.8.18

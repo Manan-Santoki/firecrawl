@@ -381,3 +381,56 @@ jobs:
         env:
           HIGHLIGHT_IMAGE: firecrawl-highlight-service-community:ci
         run: pnpm test:container
+  privacy-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/fire-privacy-community
+    env:
+      SPACY_MODEL_URL: https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+      SPACY_MODEL_SHA256: 1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/fire-privacy-community/requirements*.txt
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Install service and pinned spaCy model
+        run: |
+          python -m pip install -r requirements-dev.txt
+          curl --fail --silent --show-error --location --output /tmp/en_core_web_sm-3.8.0-py3-none-any.whl "${SPACY_MODEL_URL}"
+          echo "${SPACY_MODEL_SHA256}  /tmp/en_core_web_sm-3.8.0-py3-none-any.whl" | sha256sum --check
+          python -m pip install --no-deps /tmp/en_core_web_sm-3.8.0-py3-none-any.whl
+      - name: Unit and in-process contract tests
+        run: python -m pytest -q
+      - name: Validate privacy Compose overlay
+        run: |
+          docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.privacy.yaml config --quiet
+          resolved_context="$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.privacy.yaml config --format json | jq -r '.services["fire-privacy-community"].build.context')"
+          test "$(realpath "${resolved_context}")" = "$(realpath .)"
+          test "$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.privacy.yaml config --format json | jq -r '.services.api.environment.FIRE_PRIVACY_URL')" = http://fire-privacy-community:3010
+      - name: Build privacy image
+        run: docker build --tag firecrawl-privacy-community-ci .
+      - name: Black-box contract test against the built image
+        run: |
+          docker run --detach --name privacy-community-ci --read-only --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --publish 127.0.0.1:39010:3010 \
+            --env PRIVACY_API_KEY=ci-privacy-key \
+            --env PRIVACY_DATA_REGION=us \
+            firecrawl-privacy-community-ci
+          trap 'docker logs privacy-community-ci || true; docker rm --force privacy-community-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:39010/health/readiness >/dev/null; then break; fi
+            if [ "${attempt}" -eq 60 ]; then exit 1; fi
+            sleep 1
+          done
+          FIRE_PRIVACY_URL=http://127.0.0.1:39010 PRIVACY_API_KEY=ci-privacy-key node --test test/contract.mjs
+          if docker logs privacy-community-ci 2>&1 | grep -q 'alice@example.com'; then
+            echo "request text leaked into service logs" >&2
+            exit 1
+          fi

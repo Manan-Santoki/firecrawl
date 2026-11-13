@@ -1,0 +1,49 @@
+# Opt-in overlay for PII redaction (`redactPII` on scrape/parse).
+#
+# Runs the provider-neutral fire-privacy replacement (Microsoft Presidio +
+# spaCy, CPU only) and points the API at it. The service is reachable only on
+# the Compose backend network; no host port is published. The stock API
+# client sends no credentials, so keep the service private rather than
+# setting PRIVACY_API_KEY unless a proxy in between injects the header.
+#
+#   docker compose -f docker-compose.yaml -f community/docker-compose.privacy.yaml up --build
+services:
+  api:
+    environment:
+      FIRE_PRIVACY_URL: http://fire-privacy-community:3010
+      # The API's default per-chunk budget (5 s) is sized for Cloud GPUs. A
+      # 28K-character chunk takes ~1-3 s of CPU here, plus queueing when the
+      # API fans out three chunks at once.
+      FIRE_PRIVACY_TIMEOUT_MS: ${FIRE_PRIVACY_TIMEOUT_MS:-30000}
+    depends_on:
+      fire-privacy-community:
+        condition: service_healthy
+
+  fire-privacy-community:
+    # Relative to the first Compose file (the repository root).
+    build:
+      context: apps/fire-privacy-community
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3010
+      PRIVACY_WORKERS: ${PRIVACY_WORKERS:-2}
+      PRIVACY_MAX_TEXT_BYTES: ${PRIVACY_MAX_TEXT_BYTES:-100000}
+      PRIVACY_QUEUE_TIMEOUT_MS: ${PRIVACY_QUEUE_TIMEOUT_MS:-20000}
+      PRIVACY_DATA_REGION: ${PRIVACY_DATA_REGION:-}
+      PRIVACY_API_KEY: ${PRIVACY_API_KEY:-}
+    expose:
+      - "3010"
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+    cpus: ${PRIVACY_CPUS:-2.0}
+    mem_limit: ${PRIVACY_MEMORY:-2G}
+    memswap_limit: ${PRIVACY_MEMORY:-2G}
+    restart: unless-stopped

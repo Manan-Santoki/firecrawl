@@ -75,6 +75,18 @@ To use it:
 - List the index overlay last.
 
 The emulator is a single-node store. The index README documents its durability limits and how to switch to Google Cloud Storage instead.
+## PII redaction service
+
+`redactPII` on scrape and parse calls a redaction service at `FIRE_PRIVACY_URL`. Firecrawl Cloud's service is private. The community replacement in [`apps/fire-privacy-community`](../apps/fire-privacy-community) implements the same `POST /redact` contract using Microsoft Presidio and a CPU spaCy model. Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.privacy.yaml \
+  up --build
+```
+
+The overlay sets `FIRE_PRIVACY_URL` and raises `FIRE_PRIVACY_TIMEOUT_MS` to 30000 on the `api` service, which also runs the workers. The service stays on the Compose network because the stock API client sends no credentials. Detection quality differs from Cloud's hosted model. The capability remains `verification-needed` until an end-to-end scrape with `redactPII` is release-qualified. See the service README for entity coverage and configuration.
 
 ## Security boundary
 
