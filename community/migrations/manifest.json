@@ -59,9 +59,17 @@
       "irreversible": false
     },
     {
-      "version": "060-upstream-schema-sync",
+      "version": "060-legacy-stateful-schema",
+      "description": "Expand legacy schemas for agent session settings and partner monitoring tokens",
+      "file": "postgres/060-legacy-stateful-schema.sql",
+      "sha256": "c74aedc937aa0246f78bc15284f2a70f1004d0cee5ef842ccbca6fc0caa71aed",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "070-upstream-schema-sync",
       "description": "Expand-only schema update for upstream v2.11.739",
-      "file": "postgres/060-upstream-schema-sync.sql",
+      "file": "postgres/070-upstream-schema-sync.sql",
       "sha256": "36795deb039ce82ceac54c38eb3dd30aa696234d990f4353285d221fa2237454",
       "transactional": true,
       "irreversible": false
