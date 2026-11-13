@@ -52,6 +52,9 @@ jobs:
           - component: fire-engine
             context: apps/fire-engine-community
             image: firecrawl-fire-engine-community
+          - component: agent
+            context: apps/agent-community
+            image: firecrawl-agent-community
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community

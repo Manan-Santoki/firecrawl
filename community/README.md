@@ -84,6 +84,9 @@ The provider-neutral replacement for Firecrawl's private `AVGRAB_SERVICE_URL` se
 ## Rendering service (fire-engine replacement)
 
 [`apps/fire-engine-community`](../apps/fire-engine-community) implements the HTTP contract the API uses for `FIRE_ENGINE_BETA_URL`, enabling screenshots, branding, scrape actions, mobile/location emulation and `proxy: "stealth" | "enhanced"` with open-source components (Patchright Chromium, optional operator proxies). Enable it with:
+## Agent service
+
+[`apps/agent-community`](../apps/agent-community) implements the internal `EXTRACT_V3_BETA_URL` contract behind `/v2/agent` (transcribed from upstream `v2.11.739`) on an OpenAI-compatible model, using this stack's own API for search, scrape, map and optional interact. It builds on the MIT-licensed [firecrawl/web-agent](https://github.com/firecrawl/web-agent) skills and prompt (see its `NOTICE`). Enable it with:
 
 ```bash
 docker compose \
@@ -103,6 +106,11 @@ Set a URL-safe `AVGRAB_API_KEY` (the API sends no auth header, so the overlay em
 ```
 
 Setting `FIRE_ENGINE_BETA_URL` is a global switch: chrome-cdp becomes the primary engine, `fetch` leaves the default waterfall, file URLs are fetched through the browser, and search/map discovery is sent to the service (configure `SEARXNG_ENDPOINT` there). Read the service README's "What changes in the API" section before enabling it on an existing deployment. Its capability rows remain **Verification needed** until a release qualifies them.
+  -f community/docker-compose.agent.yaml \
+  up --build
+```
+
+Set `AGENT_INTEROP_SECRET` (shared by the API and the agent service), `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `AGENT_MODEL` (or `COMMUNITY_MODEL_NAME`). Without a Bigtable job access table, the API resolves agent run ownership from the agent service's status (team and creation time, 24h window), so status, cancel, trace, skill and snapshot work on a self-hosted stack. See the capability matrix for current evidence.
 
 ## Security boundary
 

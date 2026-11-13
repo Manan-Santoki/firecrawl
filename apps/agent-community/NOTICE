@@ -1,0 +1,16 @@
+Firecrawl Community agent service
+Copyright (c) the Firecrawl Community contributors. Licensed under AGPL-3.0
+as part of this repository.
+
+This service includes material from firecrawl/web-agent
+(https://github.com/firecrawl/web-agent), commit
+ad4bedca12ddcd1c50635e2d37abb1eedb920703, under the MIT License
+(Copyright (c) 2026 Firecrawl). The full license text is in
+third_party/web-agent/LICENSE.
+
+- skills/**: copied unmodified from agent-core/src/skills/definitions.
+- src/prompts.ts: system prompt adapted from
+  agent-core/src/orchestrator/prompts/system.md and skills.md (sections for
+  tools this service does not provide were removed and tool names changed).
+- src/skills.ts: the on-demand skill / site-playbook design follows
+  agent-core/src/skills (reimplemented, no code copied).
