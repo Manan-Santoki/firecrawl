@@ -1,0 +1,38 @@
+# Test-only overlay for community/tests/index-e2e/run.mjs. Adds a fixture
+# origin (also a fake SearXNG endpoint) and lets the scrapers reach it on the
+# private Compose network. Never use this file for a deployment.
+services:
+  index-e2e-fixture:
+    image: ${INDEX_E2E_NODE_IMAGE:-node:22-alpine}
+    command: ["node", "/fixture/fixture-server.mjs"]
+    volumes:
+      - ./community/tests/index-e2e:/fixture:ro
+    networks:
+      backend:
+        aliases:
+          - fixture.index-e2e.test
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  # The base health check allows ~20 s; loaded CI and Docker Desktop hosts
+  # can need longer on first boot.
+  rabbitmq:
+    healthcheck:
+      retries: 40
+      start_period: 30s
+
+  playwright-service:
+    environment:
+      ALLOW_LOCAL_WEBHOOKS: "true"
+
+  api:
+    environment:
+      ALLOW_LOCAL_WEBHOOKS: "true"
+      SEARXNG_ENDPOINT: http://fixture.index-e2e.test:8080
+      LOGGING_LEVEL: ${LOGGING_LEVEL:-info}
+    depends_on:
+      index-e2e-fixture:
+        condition: service_healthy

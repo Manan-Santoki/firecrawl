@@ -1,0 +1,61 @@
+# Opt-in overlay for the provider-neutral fire-engine replacement.
+#
+# Setting FIRE_ENGINE_BETA_URL changes the API's behaviour globally (see
+# apps/fire-engine-community/README.md, "What changes in the API"): chrome-cdp
+# becomes the primary scrape engine, the plain `fetch` engine leaves the
+# default waterfall, PDF/document URLs are fetched through the browser, and
+# search/map discovery is answered by this service (which forwards to
+# SEARXNG_ENDPOINT when set, otherwise DuckDuckGo).
+#
+#   docker compose -f docker-compose.yaml -f community/docker-compose.fire-engine.yaml up --build
+services:
+  api:
+    environment:
+      # The API's fire-engine client sends no credentials, so an optional
+      # shared secret travels as a path prefix instead.
+      FIRE_ENGINE_BETA_URL: http://fire-engine-community:3010${FIRE_ENGINE_API_KEY:+/key/${FIRE_ENGINE_API_KEY}}
+    depends_on:
+      fire-engine-community:
+        condition: service_healthy
+
+  fire-engine-community:
+    # Relative build paths resolve against the first Compose file (the
+    # repository root), matching community/docker-compose.browser.yaml.
+    build:
+      context: apps/fire-engine-community
+      dockerfile: Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3010
+      FIRE_ENGINE_API_KEY: ${FIRE_ENGINE_API_KEY:-}
+      MAX_CONCURRENT_SCRAPES: ${FIRE_ENGINE_MAX_CONCURRENT_SCRAPES:-4}
+      MAX_QUEUED_SCRAPES: ${FIRE_ENGINE_MAX_QUEUED_SCRAPES:-32}
+      MAX_SCRAPE_TIMEOUT_MS: ${FIRE_ENGINE_MAX_SCRAPE_TIMEOUT_MS:-180000}
+      BLOCK_PRIVATE_NETWORKS: ${FIRE_ENGINE_BLOCK_PRIVATE_NETWORKS:-true}
+      BLOCK_ADS: ${FIRE_ENGINE_BLOCK_ADS:-true}
+      ANTIBOT_RETRY: ${FIRE_ENGINE_ANTIBOT_RETRY:-true}
+      PROXY_SERVER: ${PROXY_SERVER:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+      STEALTH_PROXY_SERVER: ${STEALTH_PROXY_SERVER:-}
+      STEALTH_PROXY_USERNAME: ${STEALTH_PROXY_USERNAME:-}
+      STEALTH_PROXY_PASSWORD: ${STEALTH_PROXY_PASSWORD:-}
+      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-}
+      SEARXNG_ENGINES: ${SEARXNG_ENGINES:-}
+      SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES:-}
+      SEARCH_DUCKDUCKGO_FALLBACK: ${FIRE_ENGINE_SEARCH_DUCKDUCKGO_FALLBACK:-true}
+    expose:
+      - "3010"
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    shm_size: 1gb
+    pids_limit: ${FIRE_ENGINE_PIDS_LIMIT:-2048}
+    cpus: ${FIRE_ENGINE_CPUS:-2.0}
+    mem_limit: ${FIRE_ENGINE_MEMORY:-4G}
+    memswap_limit: ${FIRE_ENGINE_MEMORY:-4G}
+    restart: unless-stopped

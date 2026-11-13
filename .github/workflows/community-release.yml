@@ -40,6 +40,21 @@ jobs:
           - component: browser
             context: apps/browser-service-community
             image: firecrawl-browser-community
+          - component: highlight
+            context: apps/highlight-service-community
+            image: firecrawl-highlight-community
+          - component: privacy
+            context: apps/fire-privacy-community
+            image: firecrawl-privacy-community
+          - component: avgrab
+            context: apps/avgrab-community
+            image: firecrawl-avgrab-community
+          - component: fire-engine
+            context: apps/fire-engine-community
+            image: firecrawl-fire-engine-community
+          - component: agent
+            context: apps/agent-community
+            image: firecrawl-agent-community
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community

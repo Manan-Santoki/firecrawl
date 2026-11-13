@@ -52,6 +52,66 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## Highlight service
+
+[`apps/highlight-service-community`](../apps/highlight-service-community) replaces the private service behind upstream's `HIGHLIGHT_MODEL_URL`. It implements `/batch_highlight_indexed`, `/batch_highlight` and `/highlight` with BM25 ranking. It adds an optional OpenAI-compatible embeddings endpoint (`EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY`) for hybrid ranking. Enable it with `-f community/docker-compose.highlight.yaml` and a strong `HIGHLIGHT_SERVICE_TOKEN`.
+
+The API only calls the service for `/v2/search` excerpts when it also has `INDEX_DATABASE_URL` and `GCS_INDEX_BUCKET_NAME`. Both come from the scrape index overlay below. See the service README for details.
+
+## Scrape index
+
+[`community/docker-compose.index.yaml`](docker-compose.index.yaml) adds the scrape index that upstream keeps in a private database and bucket. It provides:
+
+- a separate index PostgreSQL (`INDEX_DATABASE_URL`) migrated from [`migrations/index-db`](migrations/index-db/README.md);
+- the reconstructed SQL functions the API calls, such as `index_get_recent_5`;
+- a GCS-compatible object store (`fsouza/fake-gcs-server` on a persistent volume, reached through `STORAGE_EMULATOR_HOST`) for the `<id>.json` page objects.
+
+It enables `maxAge` cache reuse, lockdown mode, index-backed map and crawl discovery, and, together with the highlight overlay, search excerpts.
+
+To use it:
+
+- Set strong `INDEX_POSTGRES_PASSWORD` and `INDEX_POSTGRES_PASSWORD_URLENCODED` values.
+- Include the authenticated overlay. The index worker only runs with `USE_DB_AUTHENTICATION=true`.
+- List the index overlay last.
+
+The emulator is a single-node store. The index README documents its durability limits and how to switch to Google Cloud Storage instead.
+## PII redaction service
+
+`redactPII` on scrape and parse calls a redaction service at `FIRE_PRIVACY_URL`. Firecrawl Cloud's service is private. The community replacement in [`apps/fire-privacy-community`](../apps/fire-privacy-community) implements the same `POST /redact` contract using Microsoft Presidio and a CPU spaCy model. Enable it with:
+## Audio and video service
+
+The provider-neutral replacement for Firecrawl's private `AVGRAB_SERVICE_URL` service lives in [`apps/avgrab-community`](../apps/avgrab-community). It implements the upstream contract used by the `audio` and `video` scrape formats, generic video discovery, YouTube metadata/transcripts and YouTube channel/playlist expansion in `/v2/map`, using yt-dlp and ffmpeg. Enable it with:
+## Rendering service (fire-engine replacement)
+
+[`apps/fire-engine-community`](../apps/fire-engine-community) implements the HTTP contract the API uses for `FIRE_ENGINE_BETA_URL`, enabling screenshots, branding, scrape actions, mobile/location emulation and `proxy: "stealth" | "enhanced"` with open-source components (Patchright Chromium, optional operator proxies). Enable it with:
+## Agent service
+
+[`apps/agent-community`](../apps/agent-community) implements the internal `EXTRACT_V3_BETA_URL` contract behind `/v2/agent` (transcribed from upstream `v2.11.739`) on an OpenAI-compatible model, using this stack's own API for search, scrape, map and optional interact. It builds on the MIT-licensed [firecrawl/web-agent](https://github.com/firecrawl/web-agent) skills and prompt (see its `NOTICE`). Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.privacy.yaml \
+  up --build
+```
+
+The overlay sets `FIRE_PRIVACY_URL` and raises `FIRE_PRIVACY_TIMEOUT_MS` to 30000 on the `api` service, which also runs the workers. The service stays on the Compose network because the stock API client sends no credentials. Detection quality differs from Cloud's hosted model. The capability remains `verification-needed` until an end-to-end scrape with `redactPII` is release-qualified. See the service README for entity coverage and configuration.
+  -f community/docker-compose.avgrab.yaml \
+  up --build
+```
+
+Set a URL-safe `AVGRAB_API_KEY` (the API sends no auth header, so the overlay embeds the key as a path prefix in `AVGRAB_SERVICE_URL`), a stable `AVGRAB_SIGNING_KEY`, and `AVGRAB_PUBLIC_URL` to an address where clients can download the signed, expiring media links (or configure the S3-compatible backend). The capability stays **Verification needed** until a staging release run qualifies it.
+  -f community/docker-compose.fire-engine.yaml \
+  up --build
+```
+
+Setting `FIRE_ENGINE_BETA_URL` is a global switch: chrome-cdp becomes the primary engine, `fetch` leaves the default waterfall, file URLs are fetched through the browser, and search/map discovery is sent to the service (configure `SEARXNG_ENDPOINT` there). Read the service README's "What changes in the API" section before enabling it on an existing deployment. Its capability rows remain **Verification needed** until a release qualifies them.
+  -f community/docker-compose.agent.yaml \
+  up --build
+```
+
+Set `AGENT_INTEROP_SECRET` (shared by the API and the agent service), `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `AGENT_MODEL` (or `COMMUNITY_MODEL_NAME`). Without a Bigtable job access table, the API resolves agent run ownership from the agent service's status (team and creation time, 24h window), so status, cancel, trace, skill and snapshot work on a self-hosted stack. See the capability matrix for current evidence.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.

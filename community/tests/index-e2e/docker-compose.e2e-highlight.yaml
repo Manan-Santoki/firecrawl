@@ -1,0 +1,6 @@
+# Test-only: run the highlight overlay against a prebuilt highlight image
+# (built from apps/highlight-service-community) instead of building it here.
+services:
+  highlight-service-community:
+    image: ${HIGHLIGHT_IMAGE:-firecrawl-highlight-service-community:dev}
+    pull_policy: never

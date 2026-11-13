@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   adoptionPlan,
@@ -25,7 +26,9 @@ test("the checked-in manifest discovers every numbered SQL file and verifies che
     "030-selfhost-constraints",
     "040-selfhost-rpcs",
     "050-revoke-public-rpc-execute",
-    "060-upstream-schema-sync",
+    "060-legacy-stateful-schema",
+    "070-upstream-schema-sync",
+    "080-auth-chunk-2",
   ]);
 });
 
@@ -119,6 +122,8 @@ test("status distinguishes pending, applied, baselined, and checksum mismatch", 
     "pending",
     "pending",
     "pending",
+    "pending",
+    "pending",
   ]);
 });
 
@@ -198,4 +203,86 @@ test("adopt confirmation is explicit and pinned", () => {
   assert.equal(unconfirmed.confirmExisting, false);
   assert.equal(confirmed.confirmExisting, true);
   assert.equal(confirmed.baselineThrough, "040-selfhost-rpcs");
+});
+
+const indexManifestPath = fileURLToPath(new URL("../migrations/index-db/manifest.json", import.meta.url));
+
+test("the index database manifest verifies checksums and the index-db.ts fingerprint", async () => {
+  const manifest = await loadManifest(indexManifestPath);
+  assert.deepEqual(manifest.migrations.map(item => item.version), [
+    "010-index-schema",
+    "020-index-rpcs",
+    "030-revoke-public-rpc-execute",
+  ]);
+  assert.equal(manifest.ledgerTable, "public.index_schema_migrations");
+  assert.equal(manifest.untrackedSchemaRelation, "public.index");
+});
+
+test("index apply SQL uses its own ledger and advisory lock so it can share a database", async () => {
+  const appManifest = await loadManifest();
+  const indexManifest = await loadManifest(indexManifestPath);
+  const sql = buildApplySql(indexManifest);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.index_schema_migrations/);
+  assert.doesNotMatch(sql, /public\.schema_migrations\b/);
+  assert.match(sql, /firecrawl-community-index-schema-migrations-v1/);
+  assert.notEqual(indexManifest.advisoryLockName, appManifest.advisoryLockName);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.index_get_recent_5\(/);
+  assert.match(buildApplySql(appManifest), /CREATE TABLE IF NOT EXISTS public\.schema_migrations/);
+});
+
+test("index baseline checks the index relations and refuses an existing index ledger", async () => {
+  const manifest = await loadManifest(indexManifestPath);
+  const sql = buildBaselineSql(manifest, { through: "030-revoke-public-rpc-execute" });
+  assert.match(sql, /to_regclass\('public\.index'\) IS NOT NULL/);
+  assert.match(sql, /IF to_regclass\('public\.index_schema_migrations'\) IS NOT NULL/);
+});
+
+test("the index schema declares every column of the published Drizzle tables", async () => {
+  const drizzle = await readFile(
+    fileURLToPath(new URL("../../apps/api/src/db/schema/index-db.ts", import.meta.url)),
+    "utf8",
+  );
+  const schemaSql = await readFile(
+    fileURLToPath(new URL("../migrations/index-db/postgres/010-index-schema.sql", import.meta.url)),
+    "utf8",
+  );
+  const tables = [...drizzle.matchAll(/pgTable\("(\w+)"/g)].map(match => match[1]);
+  assert.deepEqual(tables, ["index", "engpicker_queue", "engpicker_verdicts"]);
+  const columns = [...drizzle.matchAll(/^\s+\w+: \w+\("(\w+)"/gm)].map(match => match[1]);
+  assert.ok(columns.includes("url_hash") && columns.includes("verdict"), "column extraction sanity check");
+  const expected = [
+    ...columns,
+    ...Array.from({ length: 10 }, (_, i) => `url_split_${i}_hash`),
+    ...Array.from({ length: 5 }, (_, i) => `domain_splits_${i}_hash`),
+  ];
+  for (const table of tables) {
+    assert.match(schemaSql, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table} \\(`));
+  }
+  for (const column of expected) {
+    assert.match(schemaSql, new RegExp(`^\\s+${column} `, "m"), `missing column ${column}`);
+  }
+});
+
+test("manifest relation overrides must be schema-qualified identifiers", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "firecrawl-migrations-ledger-"));
+  await mkdir(path.join(directory, "postgres"));
+  const sourceSchema = "export const schema = {};\n";
+  await writeFile(path.join(directory, "source.ts"), sourceSchema);
+  await writeFile(path.join(directory, "postgres", "010-one.sql"), "SELECT 1;\n");
+  await writeFile(path.join(directory, "manifest.json"), JSON.stringify({
+    formatVersion: 1,
+    compatibilityPolicy: "expand-only",
+    advisoryLockName: "test",
+    ledgerTable: "public.ledger; DROP TABLE x",
+    sourceSchema: { file: "source.ts", sha256: createHash("sha256").update(sourceSchema).digest("hex") },
+    migrations: [{
+      version: "010-one",
+      description: "test",
+      file: "postgres/010-one.sql",
+      sha256: createHash("sha256").update("SELECT 1;\n").digest("hex"),
+      transactional: true,
+      irreversible: false,
+    }],
+  }));
+  await assert.rejects(loadManifest(path.join(directory, "manifest.json")), /ledgerTable must be/);
 });

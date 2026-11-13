@@ -1,0 +1,42 @@
+{
+  "formatVersion": 1,
+  "compatibilityPolicy": "expand-only",
+  "advisoryLockName": "firecrawl-community-index-schema-migrations-v1",
+  "ledgerTable": "public.index_schema_migrations",
+  "untrackedSchemaRelation": "public.index",
+  "sourceSchema": {
+    "file": "../../../apps/api/src/db/schema/index-db.ts",
+    "sha256": "2469d86cc17336800ac868d6e72550019b6f6c27a519926d554946016f29cdfe"
+  },
+  "baselineChecks": [
+    "to_regclass('public.index') IS NOT NULL",
+    "to_regclass('public.engpicker_queue') IS NOT NULL",
+    "to_regclass('public.engpicker_verdicts') IS NOT NULL"
+  ],
+  "migrations": [
+    {
+      "version": "010-index-schema",
+      "description": "Scrape-index tables matching apps/api/src/db/schema/index-db.ts",
+      "file": "postgres/010-index-schema.sql",
+      "sha256": "ce58a9a68aa866c36abf1af552e214e40622faf3461a735cdf6cc1a9154beaa0",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "020-index-rpcs",
+      "description": "Reconstructed index database functions called by the API",
+      "file": "postgres/020-index-rpcs.sql",
+      "sha256": "485054b9479c040a066cb068e0d90e409b6953a91af6e8ec640ba0a5b4a17c32",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "030-revoke-public-rpc-execute",
+      "description": "Restrict index function execution to the owning database role",
+      "file": "postgres/030-revoke-public-rpc-execute.sql",
+      "sha256": "dfd3a1b36a78a5910917446bb5e7c6ec41c7d83dbc46e49bc84cdbd96fcdb7b2",
+      "transactional": true,
+      "irreversible": false
+    }
+  ]
+}

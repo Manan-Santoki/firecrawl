@@ -1,0 +1,8 @@
+# Runtime dependencies (all open source). Keep yt-dlp current: extractors break
+# as providers change. `default` pulls yt-dlp-ejs; `deno` ships the JavaScript
+# runtime yt-dlp needs for YouTube challenge solving.
+yt-dlp[default,deno]==2026.10.26
+fastapi==0.162.7
+uvicorn[standard]==0.54.0
+beautifulsoup4==4.15.0
+boto3==1.44.2

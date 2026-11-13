@@ -1,0 +1,64 @@
+# Opt-in overlay for the community audio/video service (avgrab-community).
+#
+# Provides the AVGRAB_SERVICE_URL contract used by the `audio` and `video`
+# scrape formats, generic video discovery, YouTube metadata/transcripts and
+# YouTube channel/playlist expansion in /v2/map.
+#
+#   docker compose -f docker-compose.yaml -f community/docker-compose.avgrab.yaml up --build
+#
+# The upstream API client sends no auth header, so the shared key travels as a
+# path prefix in AVGRAB_SERVICE_URL. Produced media is delivered through
+# HMAC-signed, expiring links rooted at AVGRAB_PUBLIC_URL; those links are the
+# only routes reachable without the key.
+services:
+  api:
+    environment:
+      AVGRAB_SERVICE_URL: http://avgrab-community:8080/k/${AVGRAB_API_KEY:?Set AVGRAB_API_KEY (URL-safe characters only)}
+    depends_on:
+      avgrab-community:
+        condition: service_healthy
+
+  avgrab-community:
+    # Relative paths resolve against the first Compose file (repository root).
+    build:
+      context: apps/avgrab-community
+      dockerfile: Dockerfile
+    environment:
+      PORT: 8080
+      AVGRAB_API_KEY: ${AVGRAB_API_KEY:?Set AVGRAB_API_KEY (URL-safe characters only)}
+      AVGRAB_SIGNING_KEY: ${AVGRAB_SIGNING_KEY:?Set AVGRAB_SIGNING_KEY}
+      # Base URL end users fetch media links from. Point it at an HTTPS reverse
+      # proxy for remote clients; the default only works on this host.
+      AVGRAB_PUBLIC_URL: ${AVGRAB_PUBLIC_URL:-http://localhost:3010}
+      AVGRAB_FILE_TTL_SECONDS: ${AVGRAB_FILE_TTL_SECONDS:-3600}
+      AVGRAB_MAX_CONCURRENCY: ${AVGRAB_MAX_CONCURRENCY:-2}
+      AVGRAB_MAX_FILESIZE_MB: ${AVGRAB_MAX_FILESIZE_MB:-200}
+      AVGRAB_MAX_DURATION_SECONDS: ${AVGRAB_MAX_DURATION_SECONDS:-10800}
+      AVGRAB_RESOLVE_ENABLED: ${AVGRAB_RESOLVE_ENABLED:-true}
+      AVGRAB_S3_BUCKET: ${AVGRAB_S3_BUCKET:-}
+      AVGRAB_S3_ENDPOINT_URL: ${AVGRAB_S3_ENDPOINT_URL:-}
+      AVGRAB_S3_REGION: ${AVGRAB_S3_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AVGRAB_S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AVGRAB_S3_SECRET_ACCESS_KEY:-}
+    expose:
+      - "8080"
+    ports:
+      # Loopback only. Expose remotely through an authenticated TLS proxy.
+      - "127.0.0.1:${AVGRAB_PORT:-3010}:8080"
+    networks:
+      - backend
+    volumes:
+      - avgrab-data:/data
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    pids_limit: ${AVGRAB_PIDS_LIMIT:-512}
+    cpus: ${AVGRAB_CPUS:-2.0}
+    mem_limit: ${AVGRAB_MEMORY:-2G}
+    memswap_limit: ${AVGRAB_MEMORY:-2G}
+    restart: unless-stopped
+
+volumes:
+  avgrab-data:
