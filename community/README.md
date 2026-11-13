@@ -52,6 +52,12 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## Highlight service
+
+[`apps/highlight-service-community`](../apps/highlight-service-community) replaces the private service behind upstream's `HIGHLIGHT_MODEL_URL`. It implements `/batch_highlight_indexed`, `/batch_highlight` and `/highlight` with BM25 ranking. It adds an optional OpenAI-compatible embeddings endpoint (`EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY`) for hybrid ranking. Enable it with `-f community/docker-compose.highlight.yaml` and a strong `HIGHLIGHT_SERVICE_TOKEN`.
+
+The API only calls the service for `/v2/search` excerpts when it also has `INDEX_DATABASE_URL` and `GCS_INDEX_BUCKET_NAME`. Upstream does not publish the index database's `index_get_recent_5` function, so a fresh community install keeps plain search snippets until a portable index migration exists. See the service README for details.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.
