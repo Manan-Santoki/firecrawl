@@ -49,6 +49,9 @@ jobs:
           - component: avgrab
             context: apps/avgrab-community
             image: firecrawl-avgrab-community
+          - component: fire-engine
+            context: apps/fire-engine-community
+            image: firecrawl-fire-engine-community
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community

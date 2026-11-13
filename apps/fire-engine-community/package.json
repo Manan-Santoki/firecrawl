@@ -1,0 +1,31 @@
+{
+  "name": "@firecrawl-community/fire-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "tsx --test test/*.test.ts",
+    "test:contract": "tsx --test test/contract/*.test.ts"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0",
+    "express": "5.2.1",
+    "patchright": "1.62.1",
+    "undici": "7.30.1",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "22.18.6",
+    "esbuild": "0.27.7",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  },
+  "packageManager": "pnpm@11.4.0"
+}

@@ -81,6 +81,9 @@ The emulator is a single-node store. The index README documents its durability l
 ## Audio and video service
 
 The provider-neutral replacement for Firecrawl's private `AVGRAB_SERVICE_URL` service lives in [`apps/avgrab-community`](../apps/avgrab-community). It implements the upstream contract used by the `audio` and `video` scrape formats, generic video discovery, YouTube metadata/transcripts and YouTube channel/playlist expansion in `/v2/map`, using yt-dlp and ffmpeg. Enable it with:
+## Rendering service (fire-engine replacement)
+
+[`apps/fire-engine-community`](../apps/fire-engine-community) implements the HTTP contract the API uses for `FIRE_ENGINE_BETA_URL`, enabling screenshots, branding, scrape actions, mobile/location emulation and `proxy: "stealth" | "enhanced"` with open-source components (Patchright Chromium, optional operator proxies). Enable it with:
 
 ```bash
 docker compose \
@@ -95,6 +98,11 @@ The overlay sets `FIRE_PRIVACY_URL` and raises `FIRE_PRIVACY_TIMEOUT_MS` to 3000
 ```
 
 Set a URL-safe `AVGRAB_API_KEY` (the API sends no auth header, so the overlay embeds the key as a path prefix in `AVGRAB_SERVICE_URL`), a stable `AVGRAB_SIGNING_KEY`, and `AVGRAB_PUBLIC_URL` to an address where clients can download the signed, expiring media links (or configure the S3-compatible backend). The capability stays **Verification needed** until a staging release run qualifies it.
+  -f community/docker-compose.fire-engine.yaml \
+  up --build
+```
+
+Setting `FIRE_ENGINE_BETA_URL` is a global switch: chrome-cdp becomes the primary engine, `fetch` leaves the default waterfall, file URLs are fetched through the browser, and search/map discovery is sent to the service (configure `SEARXNG_ENDPOINT` there). Read the service README's "What changes in the API" section before enabling it on an existing deployment. Its capability rows remain **Verification needed** until a release qualifies them.
 
 ## Security boundary
 

@@ -467,3 +467,34 @@ jobs:
         # Offline only: media comes from a local ffmpeg fixture server on a
         # private Docker network. Live provider tests stay opt-in.
         run: PYTHON=python scripts/contract.sh
+
+  fire-engine:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/fire-engine-community
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/fire-engine-community/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Validate fire-engine Compose overlay
+        run: |
+          docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.fire-engine.yaml config --quiet
+          resolved_context="$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.fire-engine.yaml config --format json | jq -r '.services["fire-engine-community"].build.context')"
+          test "$(realpath "${resolved_context}")" = "$(realpath .)"
+          test "$(FIRE_ENGINE_API_KEY=ci-key docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.fire-engine.yaml config --format json | jq -r '.services.api.environment.FIRE_ENGINE_BETA_URL')" = "http://fire-engine-community:3010/key/ci-key"
+      - name: Contract tests against the built image
+        run: |
+          docker build --tag fire-engine-community:ci .
+          IMAGE=fire-engine-community:ci \
+            BRANDING_ENTRY=../api/src/scraper/scrapeURL/engines/fire-engine/branding-script/index.ts \
+            ./test/contract/run-docker.sh

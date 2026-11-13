@@ -37,7 +37,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Search | Yes | Configurable | SearXNG or another supported search provider | Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified |
+| Search | Yes | Configurable | SearXNG or another supported search provider (with the fire-engine overlay, set SEARXNG_ENDPOINT on fire-engine-community: the API sends search and map discovery there) | Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified |
 | Search result excerpts (query highlights) | Yes | Verification needed | apps/highlight-service-community via community/docker-compose.highlight.yaml (BM25, optional OpenAI-compatible embeddings) plus the scrape index from community/docker-compose.index.yaml (INDEX_DATABASE_URL with the community index_get_recent_5 migration and a GCS-compatible GCS_INDEX_BUCKET_NAME; set GCS_INDEX_BUCKET_NAME and STORAGE_EMULATOR_HOST in .env so the highlight service reads the same bucket) and a search provider | Service contract tests replay the v2.11.739 API client's /batch_highlight_indexed, /batch_highlight and /highlight requests in-process and against the built image; the index Compose end-to-end check (community/tests/index-e2e) scrapes a fixture page into the index, then /v2/search with highlights replaced the provider snippet with an excerpt the service read from the indexed object (BM25-only, local Docker run, not yet release-qualified) |
 | Research Index | Yes | Planned | Provider-neutral research corpus, ingestion and retrieval service | Staging returns HTTP 404 because RESEARCH_PROXY_URL is not configured |
 | Developer Index | Yes | Planned | Self-managed repository corpus plus keyword and vector index | Staging returns HTTP 404 because the index database/provider is unavailable |
@@ -59,8 +59,9 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Browser live view | Yes | Available | TLS route to the community browser service | Staging returned Live View and Interactive Live View URLs and the Live View page returned HTTP 200 |
 | Browser session replay | Yes | Planned | Durable recording artifacts and retention policy | Recording endpoints intentionally return a documented unsupported response |
 | Natural-language browser execution | Yes | Configurable | Community browser service plus a supported generative AI provider | Direct code execution passed; prompt execution reported the missing Google Generative AI credential |
-| Scrape actions | Yes | Planned | Provider-neutral action interpreter in the public Playwright/browser service | Live staging request returned HTTP 400 and explicitly required private Fire Engine |
-| Automatic screenshots and branding extraction | Yes | Planned | Public rendering implementation replacing the Fire Engine dependency | Staging screenshot returned an unsupported-engine warning and branding returned HTTP 500 |
+| Scrape actions | Yes | Verification needed | apps/fire-engine-community via community/docker-compose.fire-engine.yaml (sets FIRE_ENGINE_BETA_URL); wait, click, write, press, scroll, scrape, executeJavascript, screenshot, pdf and getCookies actions | Local only, not release-qualified: image contract tests (fire-engine CI job) and a local API smoke through FIRE_ENGINE_BETA_URL ran an action sequence, a missing-element ActionError and waitFor. Without the overlay, staging returned HTTP 400 requiring Fire Engine |
+| Automatic screenshots and branding extraction | Yes | Verification needed | apps/fire-engine-community overlay; screenshots return data: URLs; the branding LLM refinement step also needs an AI provider | Local only: contract tests ran the API's bundled branding script, and a local API smoke returned viewport and full-page screenshots and a branding profile. Without the overlay, staging returned an unsupported-engine warning and branding HTTP 500 |
+| Mobile, location and stealth/enhanced proxy scrapes | Yes | Verification needed | apps/fire-engine-community overlay; real geo or residential egress needs an operator proxy (PROXY_SERVER with {country}, STEALTH_PROXY_SERVER) | Local contract tests and an API smoke covered mobile emulation, locale/timezone emulation, proxy stealth/enhanced/auto against a fixture bot wall, a consistent stealth fingerprint and PDF and rawBase64 file handoff. No real anti-bot vendor or proxy network was tested |
 
 ## Documents
 
@@ -99,7 +100,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
-| Managed stealth/proxy network | Yes | Unavailable | Bring an independent proxy provider using documented proxy variables | Firecrawl Cloud proxy infrastructure is not open source |
+| Managed stealth/proxy network | Yes | Unavailable | Bring an independent proxy provider using documented proxy variables (PROXY_* and STEALTH_PROXY_* on fire-engine-community) | Firecrawl Cloud proxy infrastructure is not open source |
 | Cloud dashboard and enterprise security controls | Yes | Planned | Community operator UI plus provider-neutral SSO, audit, SIEM, IP/key and threat-policy enforcement | Swagger documents the API only; hosted dashboard, SSO, SIEM and threat protection are not configured on staging |
 | Managed scaling, SLA and support | Yes | Managed service only | Operator-owned capacity, monitoring, backups and incident response | Operational service rather than distributable source code |
 
