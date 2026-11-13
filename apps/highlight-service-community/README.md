@@ -50,7 +50,7 @@ This service reads them through the public GCS JSON API (`GET /storage/v1/b/{buc
 `/v2/search` calls this service only when `highlightsEnvReady()` is true. That needs all three of the following on the API:
 
 1. `HIGHLIGHT_MODEL_URL`: the URL of this service. The overlay sets it.
-2. `INDEX_DATABASE_URL`: the scrape-index Postgres. The API looks up recent index rows through the `index_get_recent_5(...)` SQL function. The Drizzle table definitions are public in `apps/api/src/db/schema/index-db.ts`, but upstream does not publish that function or a migration for the index database. A community index migration is required before this works on a fresh install.
+2. `INDEX_DATABASE_URL`: the scrape-index Postgres. The API looks up recent index rows through the `index_get_recent_5(...)` SQL function. The Drizzle table definitions are public in `apps/api/src/db/schema/index-db.ts`, but upstream does not publish that function or a migration for the index database. `community/docker-compose.index.yaml` provides both, plus a GCS-compatible bucket; see `community/migrations/index-db/README.md`.
 3. `GCS_INDEX_BUCKET_NAME`: the bucket the API's index engine writes to and this service reads from. Set `GCS_CREDENTIALS` and/or `STORAGE_EMULATOR_HOST` on both the API and this service.
 
 Each search request is also handled according to these rules:

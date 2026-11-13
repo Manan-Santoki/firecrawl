@@ -8,12 +8,13 @@
 # (apps/api/src/search/highlights.ts: highlightsEnvReady):
 #   - HIGHLIGHT_MODEL_URL (set below)
 #   - INDEX_DATABASE_URL: an index Postgres exposing index_get_recent_5(...).
-#     That schema is not published upstream; see
-#     apps/highlight-service-community/README.md before enabling it.
 #   - GCS_INDEX_BUCKET_NAME: the bucket the API writes index objects to and the
 #     highlight service reads from (Google Cloud Storage or a GCS-compatible
 #     emulator such as fake-gcs-server via STORAGE_EMULATOR_HOST).
-# Without the index the service runs, but search keeps provider snippets.
+# community/docker-compose.index.yaml provides both; list it after this file
+# and set GCS_INDEX_BUCKET_NAME / STORAGE_EMULATOR_HOST in .env so this service
+# sees them too. Without the index the service runs, but search keeps
+# provider snippets.
 services:
   api:
     environment:

@@ -72,8 +72,17 @@
       "name": "Search result excerpts (query highlights)",
       "cloud": true,
       "community": "verification-needed",
-      "requirements": "apps/highlight-service-community via community/docker-compose.highlight.yaml (BM25, optional OpenAI-compatible embeddings) plus the API's indexed-highlight gate: INDEX_DATABASE_URL pointing at a scrape-index Postgres that exposes index_get_recent_5 (no public migration exists yet) and a GCS or GCS-compatible GCS_INDEX_BUCKET_NAME shared by the API and the service",
-      "evidence": "Service contract tests replay the v2.11.739 API client's /batch_highlight_indexed, /batch_highlight and /highlight requests in-process and against the built image (hybrid, BM25-only and failed-embeddings modes); not yet exercised end to end through /v2/search because the community stack has no index database"
+      "requirements": "apps/highlight-service-community via community/docker-compose.highlight.yaml (BM25, optional OpenAI-compatible embeddings) plus the scrape index from community/docker-compose.index.yaml (INDEX_DATABASE_URL with the community index_get_recent_5 migration and a GCS-compatible GCS_INDEX_BUCKET_NAME; set GCS_INDEX_BUCKET_NAME and STORAGE_EMULATOR_HOST in .env so the highlight service reads the same bucket) and a search provider",
+      "evidence": "Service contract tests replay the v2.11.739 API client's /batch_highlight_indexed, /batch_highlight and /highlight requests in-process and against the built image; the index Compose end-to-end check (community/tests/index-e2e) scrapes a fixture page into the index, then /v2/search with highlights replaced the provider snippet with an excerpt the service read from the indexed object (BM25-only, local Docker run, not yet release-qualified)"
+    },
+    {
+      "id": "scrape-index",
+      "group": "Core API",
+      "name": "Scrape cache (maxAge), lockdown mode and index-backed discovery",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "community/docker-compose.index.yaml with the authenticated overlay: separate index PostgreSQL migrated from community/migrations/index-db (reconstructed index_get_recent_5 and related functions) plus fake-gcs-server behind a path gateway on a persistent volume via STORAGE_EMULATOR_HOST, or Google Cloud Storage via GCS_CREDENTIALS. Single-node emulator storage has no replication; pages won by the plain fetch engine are not indexed (upstream rule)",
+      "evidence": "community/tests/index-e2e Docker Compose run: first maxAge scrape missed and wrote the row and <id>.json object, the second was an index hit without contacting the origin, maxAge 0 bypassed the index, lockdown served the cached page and refused an uncached one with SCRAPE_LOCKDOWN_CACHE_MISS without contacting the origin, and hits survived restarts of the index database and storage; SQL behaviour tests cover every reconstructed function. Map/crawl discovery, dynamic maxAge, precrawl and engine-picker functions are reconstructed but not exercised end to end"
     },
     {
       "id": "extract",

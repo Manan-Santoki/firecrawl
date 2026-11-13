@@ -56,7 +56,25 @@ The overlay applies versioned, checksummed database migrations before seeding or
 
 [`apps/highlight-service-community`](../apps/highlight-service-community) replaces the private service behind upstream's `HIGHLIGHT_MODEL_URL`. It implements `/batch_highlight_indexed`, `/batch_highlight` and `/highlight` with BM25 ranking. It adds an optional OpenAI-compatible embeddings endpoint (`EMBEDDINGS_BASE_URL`, `EMBEDDINGS_MODEL`, `EMBEDDINGS_API_KEY`) for hybrid ranking. Enable it with `-f community/docker-compose.highlight.yaml` and a strong `HIGHLIGHT_SERVICE_TOKEN`.
 
-The API only calls the service for `/v2/search` excerpts when it also has `INDEX_DATABASE_URL` and `GCS_INDEX_BUCKET_NAME`. Upstream does not publish the index database's `index_get_recent_5` function, so a fresh community install keeps plain search snippets until a portable index migration exists. See the service README for details.
+The API only calls the service for `/v2/search` excerpts when it also has `INDEX_DATABASE_URL` and `GCS_INDEX_BUCKET_NAME`. Both come from the scrape index overlay below. See the service README for details.
+
+## Scrape index
+
+[`community/docker-compose.index.yaml`](docker-compose.index.yaml) adds the scrape index that upstream keeps in a private database and bucket. It provides:
+
+- a separate index PostgreSQL (`INDEX_DATABASE_URL`) migrated from [`migrations/index-db`](migrations/index-db/README.md);
+- the reconstructed SQL functions the API calls, such as `index_get_recent_5`;
+- a GCS-compatible object store (`fsouza/fake-gcs-server` on a persistent volume, reached through `STORAGE_EMULATOR_HOST`) for the `<id>.json` page objects.
+
+It enables `maxAge` cache reuse, lockdown mode, index-backed map and crawl discovery, and, together with the highlight overlay, search excerpts.
+
+To use it:
+
+- Set strong `INDEX_POSTGRES_PASSWORD` and `INDEX_POSTGRES_PASSWORD_URLENCODED` values.
+- Include the authenticated overlay. The index worker only runs with `USE_DB_AUTHENTICATION=true`.
+- List the index overlay last.
+
+The emulator is a single-node store. The index README documents its durability limits and how to switch to Google Cloud Storage instead.
 
 ## Security boundary
 

@@ -8,7 +8,22 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-const ledgerName = "public.schema_migrations";
+const defaultLedgerName = "public.schema_migrations";
+const defaultUntrackedSchemaRelation = "public.api_keys";
+const qualifiedRelation = /^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/;
+
+// A manifest may own a different database than the application database, e.g.
+// the scrape index behind INDEX_DATABASE_URL (index-db/manifest.json). It then
+// names its own ledger table and the relation whose presence without a ledger
+// marks an untracked legacy schema, so both manifests can also share one
+// database without colliding.
+function ledgerOf(manifest) {
+  return manifest?.ledgerTable ?? defaultLedgerName;
+}
+
+function untrackedSchemaRelationOf(manifest) {
+  return manifest?.untrackedSchemaRelation ?? defaultUntrackedSchemaRelation;
+}
 
 function sqlLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
@@ -99,6 +114,11 @@ export async function loadManifest(
   ) {
     throw new Error("Migration manifest requires an advisory lock name, source-schema fingerprint and migrations");
   }
+  for (const key of ["ledgerTable", "untrackedSchemaRelation"]) {
+    if (manifest[key] !== undefined && !qualifiedRelation.test(manifest[key])) {
+      throw new Error(`Manifest ${key} must be a lowercase schema-qualified relation name`);
+    }
+  }
 
   if (verifySourceSchema) {
     const sourceSchemaFile = path.resolve(root, manifest.sourceSchema.file);
@@ -155,7 +175,7 @@ export async function loadManifest(
   return { ...manifest, root };
 }
 
-export function ledgerSql() {
+export function ledgerSql(ledgerName = defaultLedgerName) {
   return `
 CREATE TABLE IF NOT EXISTS ${ledgerName} (
   version text PRIMARY KEY,
@@ -170,7 +190,7 @@ CREATE TABLE IF NOT EXISTS ${ledgerName} (
 `;
 }
 
-function checksumGuardSql(migrations) {
+function checksumGuardSql(migrations, ledgerName) {
   return migrations.map(migration => `
 DO $migration_checksum$
 BEGIN
@@ -187,6 +207,7 @@ $migration_checksum$;
 }
 
 export function buildApplySql(manifest, { allowIrreversible = false } = {}) {
+  const ledgerName = ledgerOf(manifest);
   const pendingBlocks = manifest.migrations.map(migration => {
     if (migration.irreversible && !allowIrreversible) {
       return `
@@ -226,14 +247,15 @@ SELECT EXISTS (SELECT 1 FROM ${ledgerName} WHERE version = ${sqlLiteral(migratio
 
   return `\\set ON_ERROR_STOP on
 SELECT pg_advisory_lock(hashtextextended(${sqlLiteral(manifest.advisoryLockName)}, 0));
-${ledgerSql()}
-${checksumGuardSql(manifest.migrations)}
+${ledgerSql(ledgerName)}
+${checksumGuardSql(manifest.migrations, ledgerName)}
 ${pendingBlocks}
 SELECT pg_advisory_unlock(hashtextextended(${sqlLiteral(manifest.advisoryLockName)}, 0));
 `;
 }
 
 export function buildBaselineSql(manifest, { through } = {}) {
+  const ledgerName = ledgerOf(manifest);
   if (!through) {
     throw new Error("baseline requires an explicit --baseline-through reviewed migration boundary");
   }
@@ -269,8 +291,8 @@ BEGIN
   END IF;
 END
 $baseline_ledger$;
-${ledgerSql()}
-${checksumGuardSql(manifest.migrations)}
+${ledgerSql(ledgerName)}
+${checksumGuardSql(manifest.migrations, ledgerName)}
 BEGIN;
 ${inserts}
 COMMIT;
@@ -314,6 +336,7 @@ async function runPsql(sql, environment = process.env) {
 }
 
 async function readAppliedRows(manifest, environment) {
+  const ledgerName = ledgerOf(manifest);
   const output = await runPsql(`
 SELECT CASE WHEN to_regclass('${ledgerName}') IS NULL THEN 'missing' ELSE 'present' END;
 `, environment);
@@ -329,18 +352,19 @@ ORDER BY version;
   }) : [];
 }
 
-async function assertFreshOrTracked(environment) {
-  const { hasLedger, hasApplicationSchema } = await databaseTrackingState(environment);
+async function assertFreshOrTracked(manifest, environment) {
+  const { hasLedger, hasApplicationSchema } = await databaseTrackingState(manifest, environment);
   if (!hasLedger && hasApplicationSchema) {
     throw new Error("existing application schema has no migration ledger; review it, then run baseline --confirm-existing");
   }
 }
 
-async function databaseTrackingState(environment) {
+async function databaseTrackingState(manifest, environment) {
+  const ledgerName = ledgerOf(manifest);
   const output = await runPsql(`
 SELECT concat_ws(E'\\t',
   (to_regclass('${ledgerName}') IS NOT NULL)::text,
-  (to_regclass('public.api_keys') IS NOT NULL)::text
+  (to_regclass('${untrackedSchemaRelationOf(manifest)}') IS NOT NULL)::text
 );
 `, environment);
   const [hasLedger, hasApplicationSchema] = output.trim().split("\t");
@@ -402,7 +426,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     if (!options.baselineThrough) {
       throw new Error("adopt requires --baseline-through or COMMUNITY_MIGRATIONS_BASELINE_THROUGH");
     }
-    const plan = adoptionPlan(await databaseTrackingState(environment));
+    const plan = adoptionPlan(await databaseTrackingState(manifest, environment));
     if (plan === "baseline-then-apply") {
       if (!options.confirmExisting) {
         throw new Error(
@@ -412,7 +436,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
       await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
       console.log("Baselined the reviewed legacy schema before apply.");
     }
-    await assertFreshOrTracked(environment);
+    await assertFreshOrTracked(manifest, environment);
     await runPsql(buildApplySql(manifest, options), environment);
     console.log(`Migration adoption complete (${manifest.migrations.length} known migrations).`);
     return;
@@ -421,7 +445,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     await runPsql(buildBaselineSql(manifest, { through: options.baselineThrough }), environment);
     console.log("Baselined the reviewed existing-schema migrations before apply.");
   }
-  await assertFreshOrTracked(environment);
+  await assertFreshOrTracked(manifest, environment);
   await runPsql(buildApplySql(manifest, options), environment);
   console.log(`Migration apply complete (${manifest.migrations.length} known migrations).`);
 }

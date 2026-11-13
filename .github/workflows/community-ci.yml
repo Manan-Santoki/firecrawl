@@ -26,6 +26,8 @@ jobs:
         run: node --test community/scripts/render-capabilities.test.mjs community/scripts/compare-openapi.test.mjs community/scripts/release-impact.test.mjs community/scripts/select-upstream-release.test.mjs community/scripts/should-dispatch-ci.test.mjs community/scripts/upstream-state.test.mjs
       - name: Test migration tooling
         run: node --test community/scripts/migrate.test.mjs
+      - name: Test index storage gateway
+        run: node --test community/scripts/gcs-json-gateway.test.mjs
       - name: Verify generated feature matrix
         run: node community/scripts/render-capabilities.mjs --check
       - name: Validate root Compose model
@@ -204,6 +206,125 @@ jobs:
           fi
           test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d divergent -Atc \
             "SELECT to_regclass('public.schema_migrations') IS NULL")" = "t"
+
+  index-database-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: firecrawl_index
+        options: >-
+          --health-cmd "pg_isready -U postgres -d firecrawl_index"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Apply index migrations twice and verify status
+        env:
+          POSTGRES_ID: ${{ job.services.postgres.id }}
+        run: |
+          printf '#!/bin/sh\nexec docker exec -i "%s" psql -U postgres -d firecrawl_index "$@"\n' "${POSTGRES_ID}" > /tmp/index-psql
+          chmod +x /tmp/index-psql
+          for run in 1 2; do
+            PSQL_BINARY=/tmp/index-psql PGUSER=postgres PGDATABASE=firecrawl_index \
+              node community/migrations/migrate.mjs apply --manifest community/migrations/index-db/manifest.json
+          done
+          PSQL_BINARY=/tmp/index-psql PGUSER=postgres PGDATABASE=firecrawl_index \
+            node community/migrations/migrate.mjs status --manifest community/migrations/index-db/manifest.json | tee /tmp/index-status.json
+          test "$(grep -c '"state": "applied"' /tmp/index-status.json)" = 3
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl_index -Atc 'SELECT count(*) FROM public.index_schema_migrations')" = 3
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl_index -Atc "SELECT to_regclass('public.schema_migrations') IS NULL")" = t
+      - name: Run index function behaviour tests
+        env:
+          POSTGRES_ID: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d firecrawl_index \
+            < community/scripts/index-db-functions.test.sql | tee /tmp/index-functions.log
+          grep -q 'index-db function tests passed' /tmp/index-functions.log
+      - name: Share one database with the application manifest
+        env:
+          POSTGRES_ID: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "${POSTGRES_ID}" createdb -U postgres shared
+          printf '#!/bin/sh\nexec docker exec -i "%s" psql -U postgres -d shared "$@"\n' "${POSTGRES_ID}" > /tmp/shared-psql
+          chmod +x /tmp/shared-psql
+          PSQL_BINARY=/tmp/shared-psql PGUSER=postgres PGDATABASE=shared node community/migrations/migrate.mjs apply
+          PSQL_BINARY=/tmp/shared-psql PGUSER=postgres PGDATABASE=shared \
+            node community/migrations/migrate.mjs apply --manifest community/migrations/index-db/manifest.json
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d shared -Atc \
+            "SELECT (SELECT count(*) FROM public.schema_migrations) || ':' || (SELECT count(*) FROM public.index_schema_migrations)")" = "5:3"
+          docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d shared \
+            < community/scripts/index-db-functions.test.sql
+      - name: Refuse an untracked index schema
+        env:
+          POSTGRES_ID: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "${POSTGRES_ID}" createdb -U postgres untracked
+          docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d untracked \
+            < community/migrations/index-db/postgres/010-index-schema.sql
+          printf '#!/bin/sh\nexec docker exec -i "%s" psql -U postgres -d untracked "$@"\n' "${POSTGRES_ID}" > /tmp/untracked-psql
+          chmod +x /tmp/untracked-psql
+          if PSQL_BINARY=/tmp/untracked-psql PGUSER=postgres PGDATABASE=untracked \
+            node community/migrations/migrate.mjs apply --manifest community/migrations/index-db/manifest.json; then
+            echo "untracked index schema unexpectedly accepted" >&2
+            exit 1
+          fi
+          PSQL_BINARY=/tmp/untracked-psql PGUSER=postgres PGDATABASE=untracked \
+            node community/migrations/migrate.mjs baseline --confirm-existing \
+              --baseline-through 010-index-schema --manifest community/migrations/index-db/manifest.json
+          PSQL_BINARY=/tmp/untracked-psql PGUSER=postgres PGDATABASE=untracked \
+            node community/migrations/migrate.mjs apply --manifest community/migrations/index-db/manifest.json
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d untracked -Atc \
+            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) FROM public.index_schema_migrations")" = "3:1"
+      - name: Validate index Compose overlay with the other overlays
+        env:
+          APP_POSTGRES_PASSWORD: ci-postgres-password
+          APP_POSTGRES_PASSWORD_URLENCODED: ci-postgres-password
+          INDEX_POSTGRES_PASSWORD: ci-index-password
+          INDEX_POSTGRES_PASSWORD_URLENCODED: ci-index-password
+          FIRECRAWL_ORG_ID: 11111111-1111-4111-8111-111111111111
+          FIRECRAWL_TEAM_ID: 22222222-2222-4222-8222-222222222222
+          FIRECRAWL_API_KEY_UUID: 33333333-3333-4333-8333-333333333333
+          BROWSER_SERVICE_API_KEY: ci-browser-key
+          HIGHLIGHT_SERVICE_TOKEN: ci-highlight-token
+        run: |
+          files="-f docker-compose.yaml -f community/docker-compose.auth.yaml -f community/docker-compose.browser.yaml -f community/docker-compose.highlight.yaml -f community/docker-compose.index.yaml"
+          docker compose ${files} config --quiet
+          docker compose ${files} config --format json > /tmp/index-compose.json
+          test "$(jq -r '.services.api.environment.INDEX_DATABASE_URL' /tmp/index-compose.json)" = "postgresql://postgres:ci-index-password@firecrawl-index-db:5432/firecrawl_index"
+          test "$(jq -r '.services.api.environment.GCS_INDEX_BUCKET_NAME' /tmp/index-compose.json)" = "firecrawl-index"
+          test "$(jq -r '.services.api.environment.STORAGE_EMULATOR_HOST' /tmp/index-compose.json)" = "http://firecrawl-index-storage:4443"
+          test "$(jq -r '.services.api.environment.HIGHLIGHT_MODEL_URL' /tmp/index-compose.json)" = "http://highlight-service-community:3007"
+          test "$(jq -r '.services.api.depends_on["firecrawl-index-db-migrate"].condition' /tmp/index-compose.json)" = "service_completed_successfully"
+          test "$(jq -r '.services.api.depends_on["firecrawl-db-seed"].condition' /tmp/index-compose.json)" = "service_completed_successfully"
+          test "$(jq -r '.services["firecrawl-index-storage"].ports // [] | length' /tmp/index-compose.json)" = 0
+          test "$(jq -r '.services["firecrawl-index-storage-backend"].ports // [] | length' /tmp/index-compose.json)" = 0
+          test "$(realpath "$(jq -r '.services["firecrawl-index-storage"].volumes[0].source' /tmp/index-compose.json)")" = "$(realpath community/index-storage)"
+          resolved_context="$(jq -r '.services["firecrawl-index-db-migrate"].build.context' /tmp/index-compose.json)"
+          test "$(realpath "${resolved_context}")" = "$(realpath community/migrations)"
+
+  index-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Build highlight service image
+        run: docker build --tag firecrawl-highlight-service-community:ci apps/highlight-service-community
+      - name: Scrape, maxAge, lockdown and search excerpts through the index overlay
+        env:
+          INDEX_E2E_PROJECT: fcindexci
+          INDEX_E2E_HIGHLIGHT_COMPOSE: community/docker-compose.highlight.yaml
+          HIGHLIGHT_IMAGE: firecrawl-highlight-service-community:ci
+        run: node community/tests/index-e2e/run.mjs
 
   browser-service:
     runs-on: ubuntu-latest
