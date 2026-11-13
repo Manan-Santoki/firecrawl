@@ -334,7 +334,7 @@
       "cloud": true,
       "community": "verification-needed",
       "requirements": "apps/dashboard-community with the authenticated overlay and community/docker-compose.dashboard.yaml; Better Auth accounts in the dashboard schema",
-      "evidence": "Local Docker Compose Playwright run covers bootstrap, invites, per-user teams and keys, request log isolation, enforced credit limits and disable; not yet release-qualified on staging"
+      "evidence": "Local Docker Compose Playwright run covers bootstrap, invites, per-user teams and keys, request log isolation, enforced credit limits and disable, the playground, monitors, jobs, team blocklists enforced by the API, alerts, retention, audit log and webhooks; not yet release-qualified on staging"
     },
     {
       "id": "request-log",

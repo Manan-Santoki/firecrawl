@@ -32,6 +32,7 @@ import {
   consumeMonitorSearchCheckJobs,
 } from "./monitoring/queue";
 import { shutdownPubSubLogging } from "./logging/log_job";
+import { startCommunityBlocklistRefresh } from "../lib/community/blocklist-refresh";
 
 configDotenv();
 
@@ -441,6 +442,7 @@ app.listen(workerPort, (error?: Error) => {
     _logger.error("Failed to initialize blocklist", { error: e });
     process.exit(1);
   });
+  startCommunityBlocklistRefresh();
 
   initializeEngineForcing();
 

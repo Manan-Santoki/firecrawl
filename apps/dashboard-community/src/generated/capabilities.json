@@ -1,0 +1,367 @@
+{
+  "schemaVersion": 2,
+  "distribution": "community",
+  "upstream": "firecrawl/firecrawl",
+  "evidence": {
+    "sourceOfTruth": "Firecrawl hosted v2 documentation and hosted OpenAPI",
+    "sourceUrl": "https://docs.firecrawl.dev/api-reference/v2-introduction",
+    "hostedOpenApiUrl": "https://docs.firecrawl.dev/api-reference/v2-openapi.json",
+    "communityRelease": "community-v2.11.267.4",
+    "testId": "dokploy-staging-run-33483393087",
+    "verifiedAt": "2026-09-01",
+    "limitations": "Authenticated compatibility smoke and a 30-minute browser lifecycle soak establish behavior for the recorded release only. Provider-backed, managed-infrastructure and untested format variants are not inferred from route presence."
+  },
+  "statusDefinitions": {
+    "available": "Runs entirely from code and services published in this repository.",
+    "configurable": "Works when an operator supplies a documented third-party or local provider.",
+    "partial": "A useful subset is release-qualified, but the hosted behavior or format matrix is incomplete.",
+    "planned": "A provider-neutral community implementation is planned but not yet release-qualified.",
+    "unavailable": "Depends on a service or contract that is not publicly distributable.",
+    "verification-needed": "Public code exists, but the community distribution has not completed a release-grade compatibility test.",
+    "managed-service-only": "This is an operated Cloud service guarantee rather than a distributable API implementation."
+  },
+  "capabilities": [
+    {
+      "id": "scrape",
+      "group": "Core API",
+      "name": "Scrape",
+      "cloud": true,
+      "community": "available",
+      "requirements": "API, queue, Redis, RabbitMQ, NuQ PostgreSQL and Playwright",
+      "evidence": "POST /v2/scrape self-host snips"
+    },
+    {
+      "id": "crawl",
+      "group": "Core API",
+      "name": "Crawl and crawl status",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 crawl self-host snips"
+    },
+    {
+      "id": "batch-scrape",
+      "group": "Core API",
+      "name": "Batch scrape",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 batch scrape self-host snips"
+    },
+    {
+      "id": "map",
+      "group": "Core API",
+      "name": "Map",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Core community stack",
+      "evidence": "v2 map self-host snips"
+    },
+    {
+      "id": "search",
+      "group": "Discovery",
+      "name": "Search",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "SearXNG or another supported search provider (with the fire-engine overlay, set SEARXNG_ENDPOINT on fire-engine-community: the API sends search and map discovery there)",
+      "evidence": "Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified"
+    },
+    {
+      "id": "search-highlights",
+      "group": "Discovery",
+      "name": "Search result excerpts (query highlights)",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/highlight-service-community via community/docker-compose.highlight.yaml (BM25, optional OpenAI-compatible embeddings) plus the scrape index from community/docker-compose.index.yaml (INDEX_DATABASE_URL with the community index_get_recent_5 migration and a GCS-compatible GCS_INDEX_BUCKET_NAME; set GCS_INDEX_BUCKET_NAME and STORAGE_EMULATOR_HOST in .env so the highlight service reads the same bucket) and a search provider",
+      "evidence": "Service contract tests replay the v2.11.739 API client's /batch_highlight_indexed, /batch_highlight and /highlight requests in-process and against the built image; the index Compose end-to-end check (community/tests/index-e2e) scrapes a fixture page into the index, then /v2/search with highlights replaced the provider snippet with an excerpt the service read from the indexed object (BM25-only, local Docker run, not yet release-qualified)"
+    },
+    {
+      "id": "scrape-index",
+      "group": "Core API",
+      "name": "Scrape cache (maxAge), lockdown mode and index-backed discovery",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "community/docker-compose.index.yaml with the authenticated overlay: separate index PostgreSQL migrated from community/migrations/index-db (reconstructed index_get_recent_5 and related functions) plus fake-gcs-server behind a path gateway on a persistent volume via STORAGE_EMULATOR_HOST, or Google Cloud Storage via GCS_CREDENTIALS. Single-node emulator storage has no replication; pages won by the plain fetch engine are not indexed (upstream rule)",
+      "evidence": "community/tests/index-e2e Docker Compose run: first maxAge scrape missed and wrote the row and <id>.json object, the second was an index hit without contacting the origin, maxAge 0 bypassed the index, lockdown served the cached page and refused an uncached one with SCRAPE_LOCKDOWN_CACHE_MISS without contacting the origin, and hits survived restarts of the index database and storage; SQL behaviour tests cover every reconstructed function. Map/crawl discovery, dynamic maxAge, precrawl and engine-picker functions are reconstructed but not exercised end to end"
+    },
+    {
+      "id": "extract",
+      "group": "AI",
+      "name": "Structured extraction",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "OpenAI-compatible endpoint or Ollama and a supported model",
+      "evidence": "AI-gated v2 extract snips"
+    },
+    {
+      "id": "json-format",
+      "group": "AI",
+      "name": "JSON output format",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "OpenAI-compatible endpoint or Ollama and a supported model",
+      "evidence": "AI-gated scrape format snips"
+    },
+    {
+      "id": "ai-formats",
+      "group": "AI",
+      "name": "Summary, question and highlights formats",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "A correctly configured supported AI provider and model. The scrape highlights format is generated by that LLM (performDirectQuoteQuery) and does not use HIGHLIGHT_MODEL_URL or the community highlight service",
+      "evidence": "Staging returned provider errors because no compatible AI provider was configured; no release-grade run with a configured provider yet"
+    },
+    {
+      "id": "agent",
+      "group": "AI",
+      "name": "Autonomous Agent API",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/agent-community via community/docker-compose.agent.yaml: AGENT_INTEROP_SECRET shared with the API, an OpenAI-compatible model (OPENAI_BASE_URL, AGENT_MODEL or COMMUNITY_MODEL_NAME), Redis, and the stack's own API for search/scrape/map (interact optional via the browser overlay). Without BIGTABLE_JOB_ACCESS_TABLE the API authorizes agent runs from the agent service's status (24h window). GET /v2/agent (list) additionally needs DB authentication and ClickHouse",
+      "evidence": "Unit, contract (upstream v2.11.739 gateway request shapes against a mock model and mock Firecrawl API), Redis store and built-image smoke tests in Community CI; local Compose end-to-end (API + overlay + mock OpenAI-compatible model) completed POST, status, trace, snapshot, skill, cancel and thread, and the self-hosted agent access snips passed. No staging run or real-model evaluation yet. Exchange, suggestions and approvals are not implemented"
+    },
+    {
+      "id": "research-index",
+      "group": "Discovery",
+      "name": "Research Index",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Provider-neutral research corpus, ingestion and retrieval service",
+      "evidence": "Staging returns HTTP 404 because RESEARCH_PROXY_URL is not configured"
+    },
+    {
+      "id": "developer-index",
+      "group": "Discovery",
+      "name": "Developer Index",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Self-managed repository corpus plus keyword and vector index",
+      "evidence": "Staging returns HTTP 404 because the index database/provider is unavailable"
+    },
+    {
+      "id": "browser-interact",
+      "group": "Browser",
+      "name": "Interactive browser sessions",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Community browser service, authenticated PostgreSQL overlay and BROWSER_SERVICE_URL",
+      "evidence": "Staging create, list, Node, Python, Bash, CDP, execute, delete and scrape-bound interact/stop passed; the 30-minute concurrency-2 soak created and closed 112 sessions with zero transient close failures or leaks"
+    },
+    {
+      "id": "browser-live-view",
+      "group": "Browser",
+      "name": "Browser live view",
+      "cloud": true,
+      "community": "available",
+      "requirements": "TLS route to the community browser service",
+      "evidence": "Staging returned Live View and Interactive Live View URLs and the Live View page returned HTTP 200"
+    },
+    {
+      "id": "browser-replay",
+      "group": "Browser",
+      "name": "Browser session replay",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Durable recording artifacts and retention policy",
+      "evidence": "Recording endpoints intentionally return a documented unsupported response"
+    },
+    {
+      "id": "browser-ai-prompts",
+      "group": "Browser",
+      "name": "Natural-language browser execution",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "Community browser service plus a supported generative AI provider",
+      "evidence": "Direct code execution passed; prompt execution reported the missing Google Generative AI credential"
+    },
+    {
+      "id": "actions",
+      "group": "Browser",
+      "name": "Scrape actions",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community via community/docker-compose.fire-engine.yaml (sets FIRE_ENGINE_BETA_URL); wait, click, write, press, scroll, scrape, executeJavascript, screenshot, pdf and getCookies actions",
+      "evidence": "Local only, not release-qualified: image contract tests (fire-engine CI job) and a local API smoke through FIRE_ENGINE_BETA_URL ran an action sequence, a missing-element ActionError and waitFor. Without the overlay, staging returned HTTP 400 requiring Fire Engine"
+    },
+    {
+      "id": "screenshots-branding",
+      "group": "Browser",
+      "name": "Automatic screenshots and branding extraction",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community overlay; screenshots return data: URLs; the branding LLM refinement step also needs an AI provider",
+      "evidence": "Local only: contract tests ran the API's bundled branding script, and a local API smoke returned viewport and full-page screenshots and a branding profile. Without the overlay, staging returned an unsupported-engine warning and branding HTTP 500"
+    },
+    {
+      "id": "browser-emulation",
+      "group": "Browser",
+      "name": "Mobile, location and stealth/enhanced proxy scrapes",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community overlay; real geo or residential egress needs an operator proxy (PROXY_SERVER with {country}, STEALTH_PROXY_SERVER)",
+      "evidence": "Local contract tests and an API smoke covered mobile emulation, locale/timezone emulation, proxy stealth/enhanced/auto against a fixture bot wall, a consistent stealth fingerprint and PDF and rawBase64 file handoff. No real anti-bot vendor or proxy network was tested"
+    },
+    {
+      "id": "parse",
+      "group": "Documents",
+      "name": "Parse documents and uploads",
+      "cloud": true,
+      "community": "partial",
+      "requirements": "Local upload storage plus publicly available parsers",
+      "evidence": "A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified"
+    },
+    {
+      "id": "pii-redaction",
+      "group": "Documents",
+      "name": "PII redaction (redactPII)",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Community privacy service (Presidio and spaCy, CPU) via community/docker-compose.privacy.yaml and FIRE_PRIVACY_URL",
+      "evidence": "The /redact contract is covered by service unit tests and a black-box test that ports the API client's response handling; no end-to-end scrape with redactPII has been release-qualified. Detection is Presidio patterns plus spaCy NER rather than the hosted model, so recall and precision differ from Cloud"
+    },
+    {
+      "id": "media",
+      "group": "Documents",
+      "name": "Audio and video extraction",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/avgrab-community via community/docker-compose.avgrab.yaml (AVGRAB_API_KEY, AVGRAB_SIGNING_KEY, AVGRAB_PUBLIC_URL reachable by clients or an S3-compatible bucket); yt-dlp and ffmpeg; provider availability, rate limits and bot checks are outside the operator's control",
+      "evidence": "Implements the upstream v2.11.739 AVGRAB_SERVICE_URL contract (/supported-urls, /download, /download-video, /videos, /metadata, /resolve). Unit tests plus black-box container contract tests with API-shaped request bodies against local ffmpeg fixtures in Community CI; self-hosted engine routing for audio/video formats patched in the API. A local Compose run verified audio, video, YouTube metadata/transcript and /v2/map channel expansion end to end; no release-qualified staging run yet"
+    },
+    {
+      "id": "webhooks",
+      "group": "Operations",
+      "name": "Webhooks",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Reachable webhook target; local targets require explicit opt-in",
+      "evidence": "Webhook snips and SELF_HOSTED_WEBHOOK_URL support"
+    },
+    {
+      "id": "support-api",
+      "group": "Operations",
+      "name": "Support Ask and documentation search",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Independent support/search backend rather than Firecrawl's SUPPORT_AGENT_URL",
+      "evidence": "Staging returns HTTP 503 because the Cloud support backend is absent"
+    },
+    {
+      "id": "monitoring-api",
+      "group": "Operations",
+      "name": "Website monitoring API",
+      "cloud": true,
+      "community": "partial",
+      "requirements": "Persistent application database and monitoring worker",
+      "evidence": "Staging create, run, completed-check and delete lifecycle passed; email and Slack notification providers were not configured"
+    },
+    {
+      "id": "change-tracking",
+      "group": "Operations",
+      "name": "Change tracking",
+      "cloud": true,
+      "community": "partial",
+      "requirements": "Persistent application database and object storage",
+      "evidence": "Two identical staging scrapes both returned new, proving snapshot persistence is not release-qualified"
+    },
+    {
+      "id": "api-auth",
+      "group": "Platform",
+      "name": "API-key authentication",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Application PostgreSQL schema, seed process and USE_DB_AUTHENTICATION=true",
+      "evidence": "Portable PostgreSQL bootstrap and authenticated Compose overlay"
+    },
+    {
+      "id": "rate-limits",
+      "group": "Platform",
+      "name": "Unlimited self-host access",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Portable self-host authentication RPCs; infrastructure capacity remains operator-owned",
+      "evidence": "selfhost_unlimited_rate_limit_flags explicitly disables Cloud plan throttles; configurable per-team policies are not yet implemented"
+    },
+    {
+      "id": "billing",
+      "group": "Platform",
+      "name": "Usage metering and billing hooks",
+      "cloud": true,
+      "community": "configurable",
+      "requirements": "Portable no-op adapter by default; replace with an operator-owned metering adapter when required",
+      "evidence": "bill_team_7 self-host adapter removes dependence on Firecrawl Cloud billing"
+    },
+    {
+      "id": "cloud-usage",
+      "group": "Platform",
+      "name": "Cloud credit and token usage reporting",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Operator-owned metering implementation",
+      "evidence": "Staging Cloud usage endpoints return HTTP 500 while self-host billing is intentionally a no-op"
+    },
+    {
+      "id": "mcp",
+      "group": "Clients",
+      "name": "MCP server",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Firecrawl MCP client configured with the self-hosted API URL and key",
+      "evidence": "MCP tools work against the deployed v2 API"
+    },
+    {
+      "id": "sdks",
+      "group": "Clients",
+      "name": "Official SDK base-URL compatibility",
+      "cloud": true,
+      "community": "available",
+      "requirements": "Override the SDK API URL with the self-host endpoint",
+      "evidence": "SDK transport and authentication work against the self-host URL; individual API feature availability follows this matrix"
+    },
+    {
+      "id": "managed-stealth",
+      "group": "Managed infrastructure",
+      "name": "Managed stealth/proxy network",
+      "cloud": true,
+      "community": "unavailable",
+      "requirements": "Bring an independent proxy provider using documented proxy variables (PROXY_* and STEALTH_PROXY_* on fire-engine-community)",
+      "evidence": "Firecrawl Cloud proxy infrastructure is not open source"
+    },
+    {
+      "id": "community-dashboard",
+      "group": "Platform",
+      "name": "Community operator dashboard",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/dashboard-community with the authenticated overlay and community/docker-compose.dashboard.yaml; Better Auth accounts in the dashboard schema",
+      "evidence": "Local Docker Compose Playwright run covers bootstrap, invites, per-user teams and keys, request log isolation, enforced credit limits and disable, the playground, monitors, jobs, team blocklists enforced by the API, alerts, retention, audit log and webhooks; not yet release-qualified on staging"
+    },
+    {
+      "id": "request-log",
+      "group": "Platform",
+      "name": "Request log and credit metering",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "USE_DB_AUTHENTICATION=true and migration 100-community-metering; SELF_HOSTED_BILLING_MODE=metered for team and API-key credit limits",
+      "evidence": "Request-log middleware and credit-ledger unit and PostgreSQL tests; enforced 402 and 403 paths exercised by the dashboard end-to-end run"
+    },
+    {
+      "id": "cloud-dashboard-security",
+      "group": "Managed infrastructure",
+      "name": "Cloud dashboard and enterprise security controls",
+      "cloud": true,
+      "community": "planned",
+      "requirements": "Community operator UI plus provider-neutral SSO, audit, SIEM, IP/key and threat-policy enforcement",
+      "evidence": "Swagger documents the API only; hosted dashboard, SSO, SIEM and threat protection are not configured on staging"
+    },
+    {
+      "id": "managed-sla",
+      "group": "Managed infrastructure",
+      "name": "Managed scaling, SLA and support",
+      "cloud": true,
+      "community": "managed-service-only",
+      "requirements": "Operator-owned capacity, monitoring, backups and incident response",
+      "evidence": "Operational service rather than distributable source code"
+    }
+  ]
+}

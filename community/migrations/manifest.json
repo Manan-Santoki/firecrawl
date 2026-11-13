@@ -105,6 +105,14 @@
       "sha256": "cd2fb4434cffd5c6b6eb6dab98e8ef3ef786b3a377d888eb5b9726bfbe58a300",
       "transactional": true,
       "irreversible": false
+    },
+    {
+      "version": "130-dashboard-operations",
+      "description": "Community operator dashboard settings, alerts, notifications, webhooks and cleanup",
+      "file": "postgres/130-dashboard-operations.sql",
+      "sha256": "630ead1949929bee2f56f8cd04db7db0775d8cf841b5ea576afe6ab627dda23d",
+      "transactional": true,
+      "irreversible": false
     }
   ]
 }

@@ -5,7 +5,7 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 - Next.js (App Router) + TypeScript, built as a standalone container.
 - UI: [coss ui](https://coss.com/ui) only (Base UI + Tailwind CSS v4, installed with the shadcn CLI). Charts use Recharts, styled only with the coss CSS variables. See `NOTICE`.
 - Auth: [Better Auth](https://better-auth.com) on PostgreSQL: email and password, optional TOTP 2FA, database-backed rate limiting, CSRF/origin checks, secure cookies on HTTPS.
-- Data: tables in the `dashboard` and `community` schemas of the existing application database, created by the versioned community migrations (`100-community-metering`, `110-dashboard-schema`).
+- Data: tables in the `dashboard` and `community` schemas of the existing application database, created by the versioned community migrations (`100-community-metering`, `110-dashboard-schema`, `120-dashboard-playground`, `130-dashboard-operations`).
 
 ## Pages
 
@@ -22,6 +22,15 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 | Agent runs | everyone (admins: all) | Start, list, live status with steps and Live View, result JSON, cancel, skill export. Shows "Agent backend not available" when the API answers 404/501 for the agent endpoints. |
 | Job detail | everyone | Per-page list with status, view each page's result, download a page or the whole job as JSON. |
 | Service health | everyone | API, workers/queues, RabbitMQ, Redis, both PostgreSQL databases, Playwright, browser service, SearXNG, LLM endpoint and model, embedding model, optional community services. No secrets are shown. |
+| Webhooks | everyone | Default webhook URLs (with a signing secret shown once) for crawls, batch scrapes and agent runs; the playground attaches them. Test delivery and recent attempts (dashboard tests and the API's `webhook_logs`). |
+| API docs | everyone | Quick start with the deployment's base URL, the user's key status, curl / Python / JavaScript and MCP (`/mcp` on the gateway, or local `firecrawl-mcp`) snippets, Swagger link (`DASHBOARD_API_DOCS_URL`). |
+| Notifications | everyone | Alerts, accepted invites and finished jobs; header bell with toasts; per-user opt-in for limit alerts and job notifications. |
+| Feature matrix | everyone | `community/capabilities.yml` (bundled at build time) as Cloud vs this instance, with per-feature self-tests (scrape, screenshot, branding, actions, search, map, crawl, JSON, summary, audio, redactPII, maxAge cache hit, lockdown, agent, interact) that show pass/fail/latency and keep a history. |
+| Blocklist | everyone (admins: any user + global) | Team blocklist and allowed keywords in Firecrawl's own `blocklist` table; admins also manage the global list. Recently blocked requests. The API reloads the table every `COMMUNITY_BLOCKLIST_REFRESH_SECONDS`. |
+| Settings | admin | Effective configuration (LLM endpoint and model, SearXNG, community services, limits, retention), secrets masked; editable default user limits and invite policy. |
+| Alerts | admin | Rules for error rate, queue backlog, service down, credit limit nearly used and agent failures; in-app, email (SMTP) and signed-webhook delivery; history. |
+| Retention | admin | Retention days for the request log, playground history, alerts and notifications; hourly cleanup jobs with last-run status and "purge now". |
+| Audit log | admin | Sign-ins, invites, key create/revoke, limit, settings, blocklist and user changes. |
 | Users | admin | Invite (single-use expiring links), disable/enable, role, limits, new password, per-user usage. |
 | Profile | everyone | Name, password, TOTP 2FA with backup codes, sessions. |
 
@@ -32,6 +41,8 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 - **Authorization** is checked on the server in every page, server action and route handler (`src/lib/server/authz.ts`): members can only read or change their own team; asking for another team is an error, not a silent fallback. Tests cover the cross-user denials.
 - **Request log** rows are written by the API's community request-log middleware (`apps/api/src/lib/community/request-log.ts`) into `community.request_log`; credits come from the `community.credit_usage` ledger that the API fills on every charge.
 - **Limits**: team limits live in `community.team_limits`, key limits on `public.api_keys`. The API enforces them (see `community/README.md` and the API code in `apps/api/src/lib/community/metering.ts`).
+- **Background work** (alert evaluation and job notifications every minute, retention cleanup hourly) runs inside the dashboard process (`src/instrumentation.ts`); a PostgreSQL advisory lock keeps it to one replica. Set `DASHBOARD_DISABLE_SCHEDULER=true` to turn it off.
+- **Polish**: Ctrl/Cmd+K command palette, `g` then `o/k/l/j/u/p/h/n/d` shortcuts, loading skeletons, error boundaries, responsive sidebar (off-canvas on mobile), light/dark/system theme.
 - **Disabling a user** bans their dashboard account, ends their sessions and sets `teams.banned`, so the API rejects all of their keys with 403.
 
 ## Configuration
@@ -46,6 +57,10 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 | `REDIS_URL` / `REDIS_RATE_LIMIT_URL` / `REDIS_EVICT_URL` | recommended | Same Redis as the API: cache invalidation and live crawl progress. |
 | `FIRECRAWL_API_URL` | yes | Internal API URL (`http://api:3002`), used to cancel jobs and read results. Never Firecrawl Cloud. |
 | `FIRECRAWL_PUBLIC_API_URL` | no | Public API origin shown in snippets and onboarding (defaults to `FIRECRAWL_API_URL`). |
+| `DASHBOARD_API_DOCS_URL`, `DASHBOARD_MCP_URL` | no | Swagger UI and MCP endpoint shown on the API docs page (MCP defaults to `<public API>/mcp`). |
+| `DASHBOARD_LOGIN_RATE_LIMIT` | no | Sign-in attempts per IP per minute (default 5). |
+| `DASHBOARD_DISABLE_SCHEDULER` | no | `true` stops alerts, job notifications and cleanup in this process. |
+| `AGENT_SERVICE_URL` | no | Set when the agent service is deployed; without it agent endpoints that answer 5xx are shown as "not available". |
 | `DASHBOARD_ADMIN_TEAM_ID` | no | Team the bootstrap admin adopts (the overlay passes `FIRECRAWL_TEAM_ID`). |
 | `DASHBOARD_INVITE_TTL_HOURS` | no | Default invite lifetime (72). |
 | `DASHBOARD_TRUSTED_ORIGINS` | no | Extra allowed origins, comma separated. |
@@ -60,6 +75,7 @@ API-side variables (set by the overlay on the `api` service):
 | `COMMUNITY_REQUEST_LOG_ENABLED` | `true` | Write `community.request_log`. |
 | `COMMUNITY_REQUEST_LOG_RETENTION_DAYS` | `30` | Hourly purge of older rows (the credit ledger keeps at least 62 days). |
 | `SELF_HOSTED_BILLING_MODE` | `metered` | `metered` records every charge and enforces credit limits; `disabled` keeps self-host unlimited. |
+| `COMMUNITY_BLOCKLIST_REFRESH_SECONDS` | `60` | Reload Firecrawl's blocklist table so dashboard changes apply without a restart (0 disables). |
 | `COMMUNITY_DEFAULT_CONCURRENCY_LIMIT` | unset | Team concurrency when no per-user value is set (unset keeps upstream's default of 2). |
 
 ## Running it

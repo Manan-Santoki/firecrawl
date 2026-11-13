@@ -3,6 +3,7 @@ import { actingKey } from "./acting-key";
 import { ForbiddenError, type Viewer } from "./authz";
 import { query } from "./db";
 import { FirecrawlApiError, firecrawlRequest } from "./firecrawl-api";
+import { defaultWebhookFor } from "./webhooks";
 import { endpointPath, type PlaygroundKind } from "@/lib/playground-shared";
 
 const STATUS_PATHS: Partial<Record<PlaygroundKind, (id: string) => string>> = {
@@ -35,6 +36,11 @@ export async function runPlayground(
   input: { kind: PlaygroundKind; body: Record<string, unknown>; keyId?: number | null; title?: string | null },
 ): Promise<PlaygroundResult> {
   const key = await actingKey(viewer, { keyId: input.keyId ?? null });
+  // The user's default webhook is attached to async jobs that don't set one.
+  if ((input.kind === "crawl" || input.kind === "batch_scrape" || input.kind === "agent") && input.body.webhook === undefined) {
+    const hook = await defaultWebhookFor(viewer, input.kind);
+    if (hook) input = { ...input, body: { ...input.body, webhook: input.kind === "agent" ? { url: hook.url } : hook.url } };
+  }
   const started = performance.now();
   let status = 200;
   let body: unknown;

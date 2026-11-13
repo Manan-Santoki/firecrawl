@@ -21,6 +21,7 @@ import {
 import { logExtract, shutdownPubSubLogging } from "./logging/log_job";
 import { jobDurationSeconds } from "../lib/job-metrics";
 import { register } from "prom-client";
+import { startCommunityBlocklistRefresh } from "../lib/community/blocklist-refresh";
 
 configDotenv();
 
@@ -229,6 +230,7 @@ if (require.main === module) {
     _logger.error("Failed to initialize blocklist", { error: e });
     process.exit(1);
   });
+  startCommunityBlocklistRefresh();
 
   initializeEngineForcing();
 

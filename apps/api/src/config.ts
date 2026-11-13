@@ -852,6 +852,12 @@ const configSchema = z.object({
   SELF_HOSTED_BILLING_MODE: z.enum(["disabled", "metered"]).default("metered"),
   // Team concurrency for teams with no community.team_limits override. Unset
   // keeps upstream's default for a team without a billing plan.
+  // How often API processes reload the blocklist table (0 disables).
+  COMMUNITY_BLOCKLIST_REFRESH_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(60),
   // Compose passes an unset variable as "", which must mean "not set".
   COMMUNITY_DEFAULT_CONCURRENCY_LIMIT: emptyStringAsUndefined(
     z.coerce.number().int().positive(),

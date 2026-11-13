@@ -21,6 +21,7 @@ services:
       COMMUNITY_REQUEST_LOG_RETENTION_DAYS: ${COMMUNITY_REQUEST_LOG_RETENTION_DAYS:-30}
       SELF_HOSTED_BILLING_MODE: ${SELF_HOSTED_BILLING_MODE:-metered}
       COMMUNITY_DEFAULT_CONCURRENCY_LIMIT: ${COMMUNITY_DEFAULT_CONCURRENCY_LIMIT:-}
+      COMMUNITY_BLOCKLIST_REFRESH_SECONDS: ${COMMUNITY_BLOCKLIST_REFRESH_SECONDS:-60}
 
   dashboard:
     # Paths resolve against the first Compose file (the repository root).
@@ -50,6 +51,8 @@ services:
       FIRECRAWL_API_URL: ${DASHBOARD_FIRECRAWL_API_URL:-http://api:3002}
       # Public API origin shown in playground snippets and onboarding.
       FIRECRAWL_PUBLIC_API_URL: ${FIRECRAWL_PUBLIC_API_URL:-}
+      DASHBOARD_API_DOCS_URL: ${DASHBOARD_API_DOCS_URL:-}
+      DASHBOARD_MCP_URL: ${DASHBOARD_MCP_URL:-}
       COMMUNITY_REQUEST_LOG_RETENTION_DAYS: ${COMMUNITY_REQUEST_LOG_RETENTION_DAYS:-30}
       # Health probes: reachability only, values are never displayed.
       NUQ_RABBITMQ_URL: ${NUQ_RABBITMQ_URL:-amqp://rabbitmq:5672}

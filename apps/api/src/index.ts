@@ -54,6 +54,7 @@ import {
   flushCommunityRequestLog,
   startCommunityRequestLogRetention,
 } from "./lib/community/request-log";
+import { startCommunityBlocklistRefresh } from "./lib/community/blocklist-refresh";
 
 const { createBullBoard } = require("@bull-board/api");
 const { BullMQAdapter } = require("@bull-board/api/bullMQAdapter");
@@ -218,6 +219,7 @@ async function startServer(port = DEFAULT_PORT) {
   startNodeRuntimeMetrics();
   try {
     await initializeBlocklist();
+    startCommunityBlocklistRefresh();
     initializeEngineForcing();
     warmExchangeCatalog();
   } catch (error) {
