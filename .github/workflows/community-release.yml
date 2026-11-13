@@ -40,6 +40,9 @@ jobs:
           - component: browser
             context: apps/browser-service-community
             image: firecrawl-browser-community
+          - component: fire-engine
+            context: apps/fire-engine-community
+            image: firecrawl-fire-engine-community
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community

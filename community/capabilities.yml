@@ -63,7 +63,7 @@
       "name": "Search",
       "cloud": true,
       "community": "configurable",
-      "requirements": "SearXNG or another supported search provider",
+      "requirements": "SearXNG or another supported search provider (with the fire-engine overlay, set SEARXNG_ENDPOINT on fire-engine-community: the API sends search and map discovery there)",
       "evidence": "Live staging search returned real documentation results; provider coverage and hosted-scale behavior are not fully qualified"
     },
     {
@@ -161,18 +161,27 @@
       "group": "Browser",
       "name": "Scrape actions",
       "cloud": true,
-      "community": "planned",
-      "requirements": "Provider-neutral action interpreter in the public Playwright/browser service",
-      "evidence": "Live staging request returned HTTP 400 and explicitly required private Fire Engine"
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community via community/docker-compose.fire-engine.yaml (sets FIRE_ENGINE_BETA_URL); wait, click, write, press, scroll, scrape, executeJavascript, screenshot, pdf and getCookies actions",
+      "evidence": "Local only, not release-qualified: image contract tests (fire-engine CI job) and a local API smoke through FIRE_ENGINE_BETA_URL ran an action sequence, a missing-element ActionError and waitFor. Without the overlay, staging returned HTTP 400 requiring Fire Engine"
     },
     {
       "id": "screenshots-branding",
       "group": "Browser",
       "name": "Automatic screenshots and branding extraction",
       "cloud": true,
-      "community": "planned",
-      "requirements": "Public rendering implementation replacing the Fire Engine dependency",
-      "evidence": "Staging screenshot returned an unsupported-engine warning and branding returned HTTP 500"
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community overlay; screenshots return data: URLs; the branding LLM refinement step also needs an AI provider",
+      "evidence": "Local only: contract tests ran the API's bundled branding script, and a local API smoke returned viewport and full-page screenshots and a branding profile. Without the overlay, staging returned an unsupported-engine warning and branding HTTP 500"
+    },
+    {
+      "id": "browser-emulation",
+      "group": "Browser",
+      "name": "Mobile, location and stealth/enhanced proxy scrapes",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/fire-engine-community overlay; real geo or residential egress needs an operator proxy (PROXY_SERVER with {country}, STEALTH_PROXY_SERVER)",
+      "evidence": "Local contract tests and an API smoke covered mobile emulation, locale/timezone emulation, proxy stealth/enhanced/auto against a fixture bot wall, a consistent stealth fingerprint and PDF and rawBase64 file handoff. No real anti-bot vendor or proxy network was tested"
     },
     {
       "id": "parse",
@@ -288,7 +297,7 @@
       "name": "Managed stealth/proxy network",
       "cloud": true,
       "community": "unavailable",
-      "requirements": "Bring an independent proxy provider using documented proxy variables",
+      "requirements": "Bring an independent proxy provider using documented proxy variables (PROXY_* and STEALTH_PROXY_* on fire-engine-community)",
       "evidence": "Firecrawl Cloud proxy infrastructure is not open source"
     },
     {

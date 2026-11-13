@@ -52,6 +52,19 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## Rendering service (fire-engine replacement)
+
+[`apps/fire-engine-community`](../apps/fire-engine-community) implements the HTTP contract the API uses for `FIRE_ENGINE_BETA_URL`, enabling screenshots, branding, scrape actions, mobile/location emulation and `proxy: "stealth" | "enhanced"` with open-source components (Patchright Chromium, optional operator proxies). Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.fire-engine.yaml \
+  up --build
+```
+
+Setting `FIRE_ENGINE_BETA_URL` is a global switch: chrome-cdp becomes the primary engine, `fetch` leaves the default waterfall, file URLs are fetched through the browser, and search/map discovery is sent to the service (configure `SEARXNG_ENDPOINT` there). Read the service README's "What changes in the API" section before enabling it on an existing deployment. Its capability rows remain **Verification needed** until a release qualifies them.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.
