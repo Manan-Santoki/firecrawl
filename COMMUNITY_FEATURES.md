@@ -65,7 +65,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Capability | Firecrawl Cloud | Community | Requirements | Evidence |
 | --- | --- | --- | --- | --- |
 | Parse documents and uploads | Yes | Partial | Local upload storage plus publicly available parsers | A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified |
-| Audio and video extraction | Yes | Planned | Provider-neutral replacement for AVGRAB_SERVICE_URL | No release-qualified community service yet |
+| Audio and video extraction | Yes | Verification needed | apps/avgrab-community via community/docker-compose.avgrab.yaml (AVGRAB_API_KEY, AVGRAB_SIGNING_KEY, AVGRAB_PUBLIC_URL reachable by clients or an S3-compatible bucket); yt-dlp and ffmpeg; provider availability, rate limits and bot checks are outside the operator's control | Implements the upstream v2.11.739 AVGRAB_SERVICE_URL contract (/supported-urls, /download, /download-video, /videos, /metadata, /resolve). Unit tests plus black-box container contract tests with API-shaped request bodies against local ffmpeg fixtures in Community CI; no release-qualified staging run yet |
 
 ## Operations
 

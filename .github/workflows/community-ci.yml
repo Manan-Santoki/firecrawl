@@ -227,3 +227,35 @@ jobs:
         env:
           BROWSER_SERVICE_API_KEY: ci-browser-key
         run: docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.browser.yaml config --quiet
+
+  avgrab-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/avgrab-community
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/avgrab-community/requirements-dev.txt
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: pip install -r requirements-dev.txt
+      - name: Unit and HTTP contract tests
+        run: python -m pytest
+      - name: Validate avgrab Compose overlay
+        env:
+          AVGRAB_API_KEY: ci-avgrab-key
+          AVGRAB_SIGNING_KEY: ci-avgrab-signing-key
+        run: |
+          docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.avgrab.yaml config --quiet
+          resolved_context="$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.avgrab.yaml config --format json | jq -r '.services["avgrab-community"].build.context')"
+          test "$(realpath "${resolved_context}")" = "$(realpath .)"
+          test "$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.avgrab.yaml config --format json | jq -r '.services.api.environment.AVGRAB_SERVICE_URL')" = "http://avgrab-community:8080/k/ci-avgrab-key"
+      - name: Build image and run black-box contract tests against the container
+        # Offline only: media comes from a local ffmpeg fixture server on a
+        # private Docker network. Live provider tests stay opt-in.
+        run: PYTHON=python scripts/contract.sh

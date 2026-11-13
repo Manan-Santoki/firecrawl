@@ -40,6 +40,9 @@ jobs:
           - component: browser
             context: apps/browser-service-community
             image: firecrawl-browser-community
+          - component: avgrab
+            context: apps/avgrab-community
+            image: firecrawl-avgrab-community
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community

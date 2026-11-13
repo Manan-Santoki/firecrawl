@@ -52,6 +52,19 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## Audio and video service
+
+The provider-neutral replacement for Firecrawl's private `AVGRAB_SERVICE_URL` service lives in [`apps/avgrab-community`](../apps/avgrab-community). It implements the upstream contract used by the `audio` and `video` scrape formats, generic video discovery, YouTube metadata/transcripts and YouTube channel/playlist expansion in `/v2/map`, using yt-dlp and ffmpeg. Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.avgrab.yaml \
+  up --build
+```
+
+Set a URL-safe `AVGRAB_API_KEY` (the API sends no auth header, so the overlay embeds the key as a path prefix in `AVGRAB_SERVICE_URL`), a stable `AVGRAB_SIGNING_KEY`, and `AVGRAB_PUBLIC_URL` to an address where clients can download the signed, expiring media links (or configure the S3-compatible backend). The capability stays **Verification needed** until a staging release run qualifies it.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.
