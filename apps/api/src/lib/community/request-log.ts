@@ -101,6 +101,20 @@ function describeError(
 }
 
 /**
+ * The matched route as a pattern ("/v2/crawl/:jobId"). Error handlers answer
+ * after Express has restored `baseUrl`, so a bare sub-router path is not
+ * trusted; the caller then falls back to the normalized request path.
+ */
+export function routeEndpoint(
+  baseUrl: string | undefined,
+  routePath: unknown,
+): string | null {
+  if (typeof routePath !== "string" || routePath === "") return null;
+  if (baseUrl) return `${baseUrl}${routePath}`;
+  return API_PATH.test(routePath) ? routePath : null;
+}
+
+/**
  * Builds the log row for a finished request. Pure, so the redaction and
  * attribution rules are unit-testable without Express.
  */
@@ -208,9 +222,7 @@ export function communityRequestLogMiddleware() {
     const originalJson = res.json.bind(res);
     res.json = function (body: any) {
       // The route is only known while the controller that matched answers.
-      if (req.route?.path) {
-        captured.endpoint = `${req.baseUrl}${req.route.path}`;
-      }
+      captured.endpoint = routeEndpoint(req.baseUrl, req.route?.path);
       captured.body = body;
       return originalJson(body);
     };

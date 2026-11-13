@@ -1,4 +1,4 @@
-import { buildRequestLogEntry } from "../request-log";
+import { buildRequestLogEntry, routeEndpoint } from "../request-log";
 import { BatchWriter } from "../batch-writer";
 
 const TEAM = "22222222-2222-4222-8222-222222222222";
@@ -108,6 +108,18 @@ describe("buildRequestLogEntry", () => {
       captured: { endpoint: "/v2/search", body: { success: true } },
     });
     expect(entry.target!.length).toBeLessThanOrEqual(2048);
+  });
+});
+
+describe("routeEndpoint", () => {
+  it("joins a sub-router's mount path with the route pattern", () => {
+    expect(routeEndpoint("/v2", "/crawl/:jobId")).toBe("/v2/crawl/:jobId");
+    expect(routeEndpoint("", "/v0/scrape")).toBe("/v0/scrape");
+  });
+
+  it("refuses a bare sub-router path seen after baseUrl was restored", () => {
+    expect(routeEndpoint("", "/scrape")).toBeNull();
+    expect(routeEndpoint(undefined, undefined)).toBeNull();
   });
 });
 
