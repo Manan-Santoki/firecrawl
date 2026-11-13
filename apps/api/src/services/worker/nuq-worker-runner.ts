@@ -11,6 +11,7 @@ import { startNodeRuntimeMetrics } from "../../lib/node-runtime-metrics";
 import { initializeBlocklist } from "../../scraper/WebScraper/utils/blocklist";
 import { initializeEngineForcing } from "../../scraper/WebScraper/utils/engine-forcing";
 import { shutdownPubSubLogging } from "../logging/log_job";
+import { startCommunityBlocklistRefresh } from "../../lib/community/blocklist-refresh";
 
 export type WorkerQueue = {
   getJobToProcess(logger?: any): Promise<NuQJob<any, any> | null>;
@@ -61,6 +62,7 @@ export async function runNuqWorker(options: {
 }) {
   try {
     await initializeBlocklist();
+    startCommunityBlocklistRefresh();
     initializeEngineForcing();
     await options.beforeStart?.();
   } catch (error) {

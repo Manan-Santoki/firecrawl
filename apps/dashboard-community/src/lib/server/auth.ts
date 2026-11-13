@@ -3,6 +3,7 @@ import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { admin, twoFactor } from "better-auth/plugins";
+import { audit } from "./audit";
 import { pools } from "./db";
 import { env } from "./env";
 
@@ -62,6 +63,19 @@ function buildAuth() {
       cookiePrefix: "fc-dashboard",
       database: { generateId: "uuid" },
       ipAddress: { ipAddressHeaders: ["x-forwarded-for", "x-real-ip"] },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          // Every sign-in (password, 2FA completion or account creation) is audited.
+          after: async (session) => {
+            await audit(session.userId, "auth.signed_in", { userId: session.userId }, {
+              ip: session.ipAddress ?? null,
+              userAgent: session.userAgent?.slice(0, 200) ?? null,
+            });
+          },
+        },
+      },
     },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {

@@ -5,6 +5,8 @@ import { audit } from "./audit";
 import { assertAdmin, type Role, type Viewer } from "./authz";
 import { pools, query } from "./db";
 import { env } from "./env";
+import { notify } from "./notifications";
+import { getSettings } from "./settings";
 import { hashToken, newToken, safeEqual } from "./tokens";
 
 export class AccountError extends Error {
@@ -127,8 +129,12 @@ export async function createInvite(
   input: { email?: string | null; role: Role; note?: string | null; ttlHours?: number },
 ): Promise<{ url: string; expiresAt: Date }> {
   assertAdmin(viewer);
+  const { invitePolicy } = await getSettings();
+  if (invitePolicy.requireEmail && !input.email?.trim()) {
+    throw new AccountError("Invites must name the invitee's email (see Settings).");
+  }
   const { token, hash } = newToken();
-  const ttl = input.ttlHours ?? env().DASHBOARD_INVITE_TTL_HOURS;
+  const ttl = input.ttlHours ?? invitePolicy.defaultTtlHours;
   const rows = await query<{ id: string; expires_at: Date }>(
     `INSERT INTO dashboard.invitation (token_hash, email, role, note, created_by, expires_at)
      VALUES ($1, $2, $3, $4, $5::uuid, now() + make_interval(hours => $6))
@@ -179,10 +185,10 @@ export async function findUsableInvite(token: string) {
  * claim is released so the link stays usable.
  */
 export async function acceptInvite(token: string, account: NewAccount): Promise<void> {
-  const claimed = await query<{ id: string; email: string | null; role: Role }>(
+  const claimed = await query<{ id: string; email: string | null; role: Role; created_by: string | null }>(
     `UPDATE dashboard.invitation SET used_at = now()
      WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()
-     RETURNING id, email, role`,
+     RETURNING id, email, role, created_by`,
     [hashToken(token)],
   );
   const invite = claimed[0];
@@ -200,7 +206,30 @@ export async function acceptInvite(token: string, account: NewAccount): Promise<
       teamId,
     ]);
     await query(`UPDATE dashboard.invitation SET used_by = $2::uuid WHERE id = $1::uuid`, [invite.id, userId]);
+    // New users start with the instance's default limits, if any are set.
+    const { defaultLimits } = await getSettings();
+    if (defaultLimits.creditLimit !== null || defaultLimits.concurrencyLimit !== null) {
+      await query(
+        `INSERT INTO community.team_limits (team_id, credit_limit, credit_limit_interval, concurrency_limit, updated_by)
+         VALUES ($1::uuid, $2, $3, $4, 'default') ON CONFLICT (team_id) DO NOTHING`,
+        [
+          teamId,
+          defaultLimits.creditLimit,
+          defaultLimits.creditLimit === null ? null : (defaultLimits.creditLimitInterval ?? "month"),
+          defaultLimits.concurrencyLimit,
+        ],
+      );
+    }
     await audit(userId, "invite.accepted", { userId, teamId }, { inviteId: invite.id });
+    if (invite.created_by) {
+      await notify([invite.created_by], {
+        kind: "invite",
+        title: `${account.name} accepted your invite`,
+        body: account.email,
+        link: "/users",
+        dedupeKey: `invite:${invite.id}`,
+      });
+    }
   } catch (error) {
     await query(`UPDATE dashboard.invitation SET used_at = NULL WHERE id = $1::uuid AND used_by IS NULL`, [
       invite.id,

@@ -1,5 +1,7 @@
 import { cookies } from "next/headers";
 import { AppSidebar } from "@/components/app-sidebar";
+import { CommandPalette } from "@/components/command-palette";
+import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -21,10 +23,12 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
         <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />
-          <span className="text-muted-foreground text-sm">
+          <span className="hidden text-muted-foreground text-sm sm:inline">
             {viewer.role === "admin" ? "Administrator" : "Member"} workspace
           </span>
           <div className="ml-auto flex items-center gap-1">
+            <CommandPalette isAdmin={viewer.role === "admin"} />
+            <NotificationBell />
             <ThemeToggle initial={theme} />
           </div>
         </header>

@@ -1,6 +1,6 @@
 /**
- * Sidebar sections. Later releases switch an entry on by flipping `soon` and
- * adding its route; nothing else in the shell needs to change.
+ * Sidebar sections. A future entry can ship disabled by setting `soon`; the
+ * shell renders it as a "Soon" item until its route exists.
  */
 export type NavIcon =
   | "overview"
@@ -12,20 +12,24 @@ export type NavIcon =
   | "browser"
   | "monitors"
   | "agent"
+  | "webhooks"
+  | "docs"
+  | "notifications"
   | "health"
   | "users"
   | "settings"
   | "features"
   | "alerts"
   | "blocklist"
-  | "retention";
+  | "retention"
+  | "audit";
 
 export type NavItem = {
   title: string;
   href: string;
   icon: NavIcon;
   adminOnly?: boolean;
-  soon?: "v2" | "v3";
+  soon?: string;
 };
 
 export type NavGroup = { label: string; items: NavItem[] };
@@ -39,6 +43,7 @@ export const NAV: NavGroup[] = [
       { title: "Request log", href: "/logs", icon: "logs" },
       { title: "Jobs", href: "/jobs", icon: "jobs" },
       { title: "Usage", href: "/usage", icon: "usage" },
+      { title: "Notifications", href: "/notifications", icon: "notifications" },
     ],
   },
   {
@@ -48,23 +53,26 @@ export const NAV: NavGroup[] = [
       { title: "Browser sessions", href: "/browser", icon: "browser" },
       { title: "Monitors", href: "/monitors", icon: "monitors" },
       { title: "Agent runs", href: "/agent", icon: "agent" },
+      { title: "Webhooks", href: "/webhooks", icon: "webhooks" },
+      { title: "API docs", href: "/docs", icon: "docs" },
     ],
   },
   {
     label: "Operate",
     items: [
       { title: "Service health", href: "/health", icon: "health" },
+      { title: "Feature matrix", href: "/features", icon: "features" },
+      { title: "Blocklist", href: "/blocklist", icon: "blocklist" },
       { title: "Users", href: "/users", icon: "users", adminOnly: true },
     ],
   },
   {
     label: "Administration",
     items: [
-      { title: "Settings", href: "/settings", icon: "settings", adminOnly: true, soon: "v3" },
-      { title: "Feature matrix", href: "/features", icon: "features", soon: "v3" },
-      { title: "Alerts", href: "/alerts", icon: "alerts", adminOnly: true, soon: "v3" },
-      { title: "Blocklist", href: "/blocklist", icon: "blocklist", adminOnly: true, soon: "v3" },
-      { title: "Retention", href: "/retention", icon: "retention", adminOnly: true, soon: "v3" },
+      { title: "Settings", href: "/settings", icon: "settings", adminOnly: true },
+      { title: "Alerts", href: "/alerts", icon: "alerts", adminOnly: true },
+      { title: "Retention", href: "/retention", icon: "retention", adminOnly: true },
+      { title: "Audit log", href: "/audit", icon: "audit", adminOnly: true },
     ],
   },
 ];

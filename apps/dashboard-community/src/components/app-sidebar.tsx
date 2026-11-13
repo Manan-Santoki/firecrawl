@@ -2,6 +2,10 @@
 
 import {
   ActivityIcon,
+  BellRingIcon,
+  BookOpenIcon,
+  FileClockIcon,
+  WebhookIcon,
   BellIcon,
   BotIcon,
   ChartColumnIcon,
@@ -61,6 +65,10 @@ const ICONS: Record<NavIcon, ComponentType> = {
   alerts: BellIcon,
   blocklist: ShieldBanIcon,
   retention: HourglassIcon,
+  audit: FileClockIcon,
+  webhooks: WebhookIcon,
+  docs: BookOpenIcon,
+  notifications: BellRingIcon,
 };
 
 export type SidebarViewer = { name: string; email: string; role: "admin" | "member" };

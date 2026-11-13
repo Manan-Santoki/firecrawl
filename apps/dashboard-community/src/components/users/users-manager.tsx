@@ -72,7 +72,17 @@ function notify(result: { ok: boolean; error?: string }, success: string): boole
   return false;
 }
 
-export function UsersManager({ users, invites, currentUserId }: { users: UserRow[]; invites: InviteView[]; currentUserId: string }) {
+export function UsersManager({
+  users,
+  invites,
+  currentUserId,
+  defaultInviteRole = "member",
+}: {
+  users: UserRow[];
+  invites: InviteView[];
+  currentUserId: string;
+  defaultInviteRole?: "member" | "admin";
+}) {
   const router = useRouter();
   const [dialog, setDialog] = useState<UserDialog>({ kind: "none" });
   const [, startTransition] = useTransition();
@@ -248,7 +258,7 @@ export function UsersManager({ users, invites, currentUserId }: { users: UserRow
             Invites ({invites.filter((invite) => invite.status === "pending").length} pending)
           </TabsTab>
         </TabsList>
-        <InviteDialog />
+        <InviteDialog defaultRole={defaultInviteRole} />
       </div>
       <TabsPanel value="users" className="mt-4">
         <DataTable
@@ -321,11 +331,11 @@ export function UsersManager({ users, invites, currentUserId }: { users: UserRow
   );
 }
 
-function InviteDialog() {
+function InviteDialog({ defaultRole }: { defaultRole: "member" | "admin" }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("member");
+  const [role, setRole] = useState<string>(defaultRole);
   const [note, setNote] = useState("");
   const [ttl, setTtl] = useState("72");
   const [created, setCreated] = useState<{ url: string; expiresAt: string; emailed: boolean } | null>(null);

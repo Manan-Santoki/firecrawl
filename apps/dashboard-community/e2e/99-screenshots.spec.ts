@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { ADMIN, PASSWORD } from "./helpers";
 
 /** Light and dark captures of every page, written to docs/screenshots. */
-const PAGES: { name: string; path: string }[] = (process.env.SCREENSHOT_PAGES ?? "overview:/,keys:/keys,logs:/logs,jobs:/jobs,usage:/usage,health:/health,users:/users,profile:/profile,playground:/playground,browser:/browser,monitors:/monitors,agent:/agent")
+const PAGES: { name: string; path: string }[] = (process.env.SCREENSHOT_PAGES ?? "overview:/,keys:/keys,logs:/logs,jobs:/jobs,usage:/usage,health:/health,users:/users,profile:/profile,playground:/playground,browser:/browser,monitors:/monitors,agent:/agent,settings:/settings,features:/features,alerts:/alerts,blocklist:/blocklist,retention:/retention,audit:/audit,webhooks:/webhooks,docs:/docs,notifications:/notifications")
   .split(",")
   .map((entry) => {
     const [name, route] = entry.split(":");

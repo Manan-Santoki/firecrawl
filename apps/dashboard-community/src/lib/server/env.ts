@@ -27,6 +27,9 @@ const schema = z.object({
   FIRECRAWL_API_URL: z.url(),
   // Public API origin shown in snippets and onboarding (defaults to FIRECRAWL_API_URL).
   FIRECRAWL_PUBLIC_API_URL: optionalUrl,
+  // Optional links shown on the API docs page.
+  DASHBOARD_API_DOCS_URL: optionalUrl,
+  DASHBOARD_MCP_URL: optionalUrl,
   // The team the bootstrap admin adopts, normally the seeded FIRECRAWL_TEAM_ID.
   DASHBOARD_ADMIN_TEAM_ID: optionalString,
   DASHBOARD_INVITE_TTL_HOURS: z.coerce.number().int().positive().default(72),
