@@ -1,0 +1,164 @@
+# Opt-in scrape index: index PostgreSQL (INDEX_DATABASE_URL) plus a
+# GCS-compatible object store (GCS_INDEX_BUCKET_NAME) for cached pages.
+# Enables maxAge cache reuse, lockdown (serve only from the index), index-backed
+# map/crawl discovery and, with the highlight overlay, search excerpts.
+#
+# Requires the authenticated overlay: the API harness only starts the index
+# worker (which flushes queued index rows into PostgreSQL) when
+# USE_DB_AUTHENTICATION=true. List this overlay LAST so its INDEX_* values win
+# over the empty defaults of other overlays:
+#
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f community/docker-compose.auth.yaml \
+#     [-f community/docker-compose.browser.yaml] \
+#     [-f community/docker-compose.highlight.yaml] \
+#     -f community/docker-compose.index.yaml \
+#     up --build
+#
+# See community/migrations/index-db/README.md for the reconstructed SQL
+# contract, storage durability limits and backups.
+services:
+  firecrawl-index-db:
+    image: ${INDEX_POSTGRES_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${INDEX_POSTGRES_PASSWORD:?Set INDEX_POSTGRES_PASSWORD}
+      POSTGRES_DB: firecrawl_index
+    volumes:
+      - firecrawl-index-db-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d firecrawl_index"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  firecrawl-index-db-migrate:
+    build:
+      context: ./community/migrations
+    depends_on:
+      firecrawl-index-db:
+        condition: service_healthy
+    environment:
+      PGHOST: firecrawl-index-db
+      PGUSER: postgres
+      PGPASSWORD: ${INDEX_POSTGRES_PASSWORD:?Set INDEX_POSTGRES_PASSWORD}
+      PGDATABASE: firecrawl_index
+      ALLOW_IRREVERSIBLE_MIGRATIONS: ${ALLOW_IRREVERSIBLE_MIGRATIONS:-false}
+    # Fails closed on an index database that has tables but no ledger; see the
+    # README for the reviewed baseline procedure.
+    command: ["apply", "--manifest", "/migrations/index-db/manifest.json"]
+    networks:
+      - backend
+    restart: "no"
+
+  # fake-gcs-server speaks the GCS JSON API used by @google-cloud/storage and
+  # by the highlight service. The filesystem backend keeps objects on the
+  # volume; it is a single node without replication (see README).
+  firecrawl-index-storage-backend:
+    image: ${INDEX_STORAGE_IMAGE:-fsouza/fake-gcs-server:1.52.2}
+    entrypoint: ["/bin/fake-gcs-server"]
+    command:
+      - -scheme=http
+      - -host=0.0.0.0
+      - -port=4443
+      - -backend=filesystem
+      - -filesystem-root=/storage
+      # Resumable-upload session URLs point back through the gateway.
+      - -external-url=http://firecrawl-index-storage:4443
+      - -log-level=warn
+    volumes:
+      - firecrawl-index-storage-data:/storage
+    expose:
+      - "4443"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4443/storage/v1/b"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  # STORAGE_EMULATOR_HOST endpoint. @google-cloud/storage sends object reads
+  # to "<host>/b/..." (no /storage/v1 prefix), which fake-gcs-server does not
+  # route; this stateless gateway adds the prefix (see "Object storage" in
+  # community/migrations/index-db/README.md).
+  firecrawl-index-storage:
+    image: ${INDEX_STORAGE_GATEWAY_IMAGE:-node:22-alpine}
+    command: ["node", "/gateway/gcs-json-gateway.mjs"]
+    environment:
+      PORT: "4443"
+      GCS_BACKEND_URL: http://firecrawl-index-storage-backend:4443
+    volumes:
+      - ./community/index-storage:/gateway:ro
+    user: "node"
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      firecrawl-index-storage-backend:
+        condition: service_healthy
+    expose:
+      - "4443"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4443/b"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  firecrawl-index-storage-init:
+    image: ${INDEX_STORAGE_IMAGE:-fsouza/fake-gcs-server:1.52.2}
+    depends_on:
+      firecrawl-index-storage:
+        condition: service_healthy
+    environment:
+      BUCKET: ${GCS_INDEX_BUCKET_NAME:-firecrawl-index}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        base=http://firecrawl-index-storage:4443/storage/v1/b
+        if wget -q -O /dev/null "$$base/$$BUCKET"; then
+          echo "index bucket $$BUCKET exists"
+        else
+          wget -q -O /dev/null --header 'Content-Type: application/json' --post-data "{\"name\":\"$$BUCKET\"}" "$$base"
+          echo "created index bucket $$BUCKET"
+        fi
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    environment:
+      INDEX_DATABASE_URL: postgresql://postgres:${INDEX_POSTGRES_PASSWORD_URLENCODED:?Set INDEX_POSTGRES_PASSWORD_URLENCODED}@firecrawl-index-db:5432/firecrawl_index
+      GCS_INDEX_BUCKET_NAME: ${GCS_INDEX_BUCKET_NAME:-firecrawl-index}
+      # Routes every @google-cloud/storage client in the API process to the
+      # emulator. Unset it (and set GCS_CREDENTIALS) to use Google Cloud Storage.
+      STORAGE_EMULATOR_HOST: ${STORAGE_EMULATOR_HOST-http://firecrawl-index-storage:4443}
+      GCS_CREDENTIALS: ${GCS_CREDENTIALS:-}
+      # Optional Redis/Dragonfly LRU in front of index_get_recent_5/query_max_age.
+      INDEX_CACHE_REDIS_URL: ${INDEX_CACHE_REDIS_URL:-}
+      # The engine picker evaluates domains with fire-engine and an LLM; keep it
+      # off unless both are configured.
+      DISABLE_ENGPICKER: ${DISABLE_ENGPICKER:-true}
+    depends_on:
+      firecrawl-index-db-migrate:
+        condition: service_completed_successfully
+      firecrawl-index-storage-init:
+        condition: service_completed_successfully
+
+volumes:
+  firecrawl-index-db-data:
+  firecrawl-index-storage-data:
