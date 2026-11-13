@@ -227,3 +227,36 @@ jobs:
         env:
           BROWSER_SERVICE_API_KEY: ci-browser-key
         run: docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.browser.yaml config --quiet
+
+  highlight-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/highlight-service-community
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/highlight-service-community/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Validate highlight Compose overlay
+        env:
+          HIGHLIGHT_SERVICE_TOKEN: ci-highlight-token
+        run: |
+          docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.highlight.yaml config --quiet
+          resolved_context="$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.highlight.yaml config --format json | jq -r '.services["highlight-service-community"].build.context')"
+          test "$(realpath "${resolved_context}")" = "$(realpath .)"
+          test "$(docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.highlight.yaml config --format json | jq -r '.services.api.environment.HIGHLIGHT_MODEL_URL')" = "http://highlight-service-community:3007"
+      - name: Build highlight service image
+        run: docker build --tag firecrawl-highlight-service-community:ci .
+      - name: Run contract suite against the built image
+        env:
+          HIGHLIGHT_IMAGE: firecrawl-highlight-service-community:ci
+        run: pnpm test:container

@@ -1,0 +1,69 @@
+# Opt-in overlay for the community query-highlight service, the provider-neutral
+# replacement for the private service behind HIGHLIGHT_MODEL_URL.
+#
+#   docker compose -f docker-compose.yaml \
+#     -f community/docker-compose.highlight.yaml up --build
+#
+# The API only calls the service for /v2/search when ALL of these are set
+# (apps/api/src/search/highlights.ts: highlightsEnvReady):
+#   - HIGHLIGHT_MODEL_URL (set below)
+#   - INDEX_DATABASE_URL: an index Postgres exposing index_get_recent_5(...).
+#     That schema is not published upstream; see
+#     apps/highlight-service-community/README.md before enabling it.
+#   - GCS_INDEX_BUCKET_NAME: the bucket the API writes index objects to and the
+#     highlight service reads from (Google Cloud Storage or a GCS-compatible
+#     emulator such as fake-gcs-server via STORAGE_EMULATOR_HOST).
+# Without the index the service runs, but search keeps provider snippets.
+services:
+  api:
+    environment:
+      HIGHLIGHT_MODEL_URL: http://highlight-service-community:3007
+      HIGHLIGHT_MODEL_TOKEN: ${HIGHLIGHT_SERVICE_TOKEN:?Set HIGHLIGHT_SERVICE_TOKEN}
+      # Self-hosted instances have no reason to run highlights in shadow mode:
+      # apply them to every eligible search unless the request opts out.
+      HIGHLIGHT_ROLLOUT_PERCENT: ${HIGHLIGHT_ROLLOUT_PERCENT:-100}
+      INDEX_DATABASE_URL: ${INDEX_DATABASE_URL:-}
+      GCS_INDEX_BUCKET_NAME: ${GCS_INDEX_BUCKET_NAME:-}
+      GCS_CREDENTIALS: ${GCS_CREDENTIALS:-}
+      STORAGE_EMULATOR_HOST: ${STORAGE_EMULATOR_HOST:-}
+    depends_on:
+      highlight-service-community:
+        condition: service_healthy
+
+  highlight-service-community:
+    # Relative paths resolve against the first Compose file (repository root).
+    build:
+      context: apps/highlight-service-community
+      dockerfile: Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3007
+      HIGHLIGHT_SERVICE_TOKEN: ${HIGHLIGHT_SERVICE_TOKEN:?Set HIGHLIGHT_SERVICE_TOKEN}
+      # OpenAI-compatible embeddings (optional). Unset => BM25-only ranking.
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY:-}
+      EMBEDDINGS_QUERY_PREFIX: ${EMBEDDINGS_QUERY_PREFIX:-}
+      EMBEDDINGS_DOCUMENT_PREFIX: ${EMBEDDINGS_DOCUMENT_PREFIX:-}
+      EMBEDDINGS_TIMEOUT_MS: ${EMBEDDINGS_TIMEOUT_MS:-2000}
+      # Must stay below the API's 3000 ms indexed-highlight timeout.
+      REQUEST_BUDGET_MS: ${HIGHLIGHT_REQUEST_BUDGET_MS:-2500}
+      GCS_INDEX_BUCKET_NAME: ${GCS_INDEX_BUCKET_NAME:-}
+      GCS_CREDENTIALS: ${GCS_CREDENTIALS:-}
+      STORAGE_EMULATOR_HOST: ${STORAGE_EMULATOR_HOST:-}
+    expose:
+      - "3007"
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cpus: ${HIGHLIGHT_SERVICE_CPUS:-1.0}
+    mem_limit: ${HIGHLIGHT_SERVICE_MEMORY:-512M}
+    memswap_limit: ${HIGHLIGHT_SERVICE_MEMORY:-512M}
+    restart: unless-stopped
