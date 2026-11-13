@@ -52,6 +52,19 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## Agent service
+
+[`apps/agent-community`](../apps/agent-community) implements the internal `EXTRACT_V3_BETA_URL` contract behind `/v2/agent` (transcribed from upstream `v2.11.739`) on an OpenAI-compatible model, using this stack's own API for search, scrape, map and optional interact. It builds on the MIT-licensed [firecrawl/web-agent](https://github.com/firecrawl/web-agent) skills and prompt (see its `NOTICE`). Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.agent.yaml \
+  up --build
+```
+
+Set `AGENT_INTEROP_SECRET` (shared by the API and the agent service), `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `AGENT_MODEL` (or `COMMUNITY_MODEL_NAME`). The service is release-qualified only after the gateway's agent job-access check works without Firecrawl's hosted stores; see the capability matrix and the service README.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.

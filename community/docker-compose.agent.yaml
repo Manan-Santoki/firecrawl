@@ -1,0 +1,73 @@
+# Opt-in overlay for the provider-neutral agent service behind POST /v2/agent.
+#
+# The API proxies /v2/agent to EXTRACT_V3_BETA_URL; this overlay points it at
+# apps/agent-community, which runs the research loop on an OpenAI-compatible
+# model and calls back into this stack's own API for search/scrape/map.
+#
+# Call graph: api -> agent-community (start/status/cancel, short HTTP calls)
+#             agent-community -> api (/v2/search, /v2/scrape, /v2/map)
+# There is no depends_on edge between the two, so neither blocks the other's
+# startup, and the API never waits on a run: it only enqueues and polls. To keep
+# agent tool calls from starving ordinary API traffic, AGENT_MAX_CONCURRENT_RUNS
+# (default 2) should stay well below the API's scrape worker capacity
+# (NUM_WORKERS_PER_QUEUE).
+services:
+  api:
+    environment:
+      EXTRACT_V3_BETA_URL: http://agent-community:3010
+      AGENT_INTEROP_SECRET: ${AGENT_INTEROP_SECRET:?Set AGENT_INTEROP_SECRET (16+ random characters)}
+
+  agent-community:
+    # Relative paths resolve against the first Compose file (repository root).
+    build:
+      context: apps/agent-community
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3010
+      AGENT_INTEROP_SECRET: ${AGENT_INTEROP_SECRET:?Set AGENT_INTEROP_SECRET (16+ random characters)}
+      REDIS_URL: ${AGENT_REDIS_URL:-${REDIS_URL:-redis://redis:6379}}
+      FIRECRAWL_API_URL: ${AGENT_FIRECRAWL_API_URL:-http://api:${INTERNAL_PORT:-3002}}
+      # Used when the gateway forwards no usable key (USE_DB_AUTHENTICATION=false
+      # forwards the placeholder "bypass"); with DB auth the caller's key is used.
+      FIRECRAWL_API_KEY: ${AGENT_FIRECRAWL_API_KEY:-}
+      COMMUNITY_MODEL_PROVIDER: ${COMMUNITY_MODEL_PROVIDER:-openai-compatible}
+      COMMUNITY_MODEL_NAME: ${COMMUNITY_MODEL_NAME:-}
+      AGENT_MODEL: ${AGENT_MODEL:-${MODEL_NAME:-}}
+      OPENAI_BASE_URL: ${AGENT_OPENAI_BASE_URL:-${OPENAI_BASE_URL:-}}
+      OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY:-${OPENAI_API_KEY:-}}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      AGENT_STRUCTURED_OUTPUT: ${AGENT_STRUCTURED_OUTPUT:-json_schema}
+      AGENT_MAX_CONCURRENT_RUNS: ${AGENT_MAX_CONCURRENT_RUNS:-2}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-0}
+      AGENT_MAX_RUNTIME_SECONDS: ${AGENT_MAX_RUNTIME_SECONDS:-600}
+      AGENT_MAX_TOTAL_TOKENS: ${AGENT_MAX_TOTAL_TOKENS:-400000}
+      AGENT_DEFAULT_MAX_CREDITS: ${AGENT_DEFAULT_MAX_CREDITS:-2500}
+      AGENT_CREDITS_PER_1K_TOKENS: ${AGENT_CREDITS_PER_1K_TOKENS:-0}
+      AGENT_FIRECRAWL_INTEROP: ${AGENT_FIRECRAWL_INTEROP:-false}
+      AGENT_ENABLE_INTERACT: ${AGENT_ENABLE_INTERACT:-false}
+      AGENT_WEBHOOK_SECRET: ${AGENT_WEBHOOK_SECRET:-}
+      AGENT_ALLOW_LOCAL_WEBHOOKS: ${AGENT_ALLOW_LOCAL_WEBHOOKS:-false}
+      LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
+    expose:
+      - "3010"
+    networks:
+      - backend
+    depends_on:
+      redis:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cpus: ${AGENT_SERVICE_CPUS:-1.0}
+    mem_limit: ${AGENT_SERVICE_MEMORY:-1G}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"

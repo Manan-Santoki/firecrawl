@@ -47,7 +47,7 @@ This matrix compares API-level availability, not managed-service guarantees. A f
 | Structured extraction | Yes | Configurable | OpenAI-compatible endpoint or Ollama and a supported model | AI-gated v2 extract snips |
 | JSON output format | Yes | Configurable | OpenAI-compatible endpoint or Ollama and a supported model | AI-gated scrape format snips |
 | Summary, question and highlights formats | Yes | Configurable | A correctly configured supported AI provider and model | Staging returned provider errors because no compatible AI provider was configured |
-| Autonomous Agent API | Yes | Planned | Provider-neutral replacement for EXTRACT_V3_BETA_URL | Release qualification not yet complete |
+| Autonomous Agent API | Yes | Verification needed | apps/agent-community via community/docker-compose.agent.yaml: AGENT_INTEROP_SECRET shared with the API, an OpenAI-compatible model (OPENAI_BASE_URL, AGENT_MODEL or COMMUNITY_MODEL_NAME), Redis, and the stack's own API for search/scrape/map (interact optional via the browser overlay). The API's job-access check must resolve agent runs without Bigtable (v2.11.739) or Supabase/GCS agent rows (v2.11.289) before GET /v2/agent/:id works | Unit, contract (upstream v2.11.739 gateway request shapes against a mock model and mock Firecrawl API), Redis store and built-image smoke tests in Community CI; no gateway end-to-end or staging run yet. Exchange, suggestions and approvals are not implemented |
 
 ## Browser
 
