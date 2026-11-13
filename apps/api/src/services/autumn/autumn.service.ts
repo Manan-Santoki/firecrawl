@@ -6,6 +6,11 @@ import * as schema from "../../db/schema";
 import { config } from "../../config";
 import { autumnClient } from "./client";
 import {
+  checkCommunityCredits,
+  getCommunityConcurrencyLimit,
+  recordCommunityCreditUsage,
+} from "../../lib/community/metering";
+import {
   firebillFinalize,
   firebillLock,
   firebillTrack,
@@ -213,8 +218,12 @@ export class AutumnService {
     /** Set only for a Gateway account, funded by the platform that created it. */
     gatewayProvisioned?: boolean;
   } | null> {
-    if (!firebillConfigured() || this.isPreviewTeam(teamId)) {
+    if (this.isPreviewTeam(teamId)) {
       return null;
+    }
+    if (!firebillConfigured()) {
+      // Community: enforce operator-set team/key limits from the local ledger.
+      return checkCommunityCredits({ teamId, value, properties });
     }
     try {
       const gatewayProvisioned = await this.isGatewayProvisioned(teamId);
@@ -445,8 +454,13 @@ export class AutumnService {
     durableRetry,
     orgId,
   }: TrackCreditsParams): Promise<boolean> {
-    if (!firebillConfigured()) return false;
     if (this.isPreviewTeam(teamId)) return false;
+    if (!firebillConfigured()) {
+      // Community: keep a local ledger of the charge. Not "tracked in
+      // request", so the billing worker's refund logic is unchanged.
+      recordCommunityCreditUsage({ teamId, value, properties });
+      return false;
+    }
 
     try {
       return await firebillTrack({
@@ -483,8 +497,15 @@ export class AutumnService {
     teamId: string,
     orgId: string | null,
   ): Promise<TeamLimits> {
-    if (!autumnClient || this.isPreviewTeam(teamId)) {
+    if (this.isPreviewTeam(teamId)) {
       return DEFAULT_TEAM_LIMITS;
+    }
+    if (!autumnClient) {
+      // Community: an operator-set team concurrency replaces the plan default.
+      const concurrency = await getCommunityConcurrencyLimit(teamId);
+      return concurrency === null
+        ? DEFAULT_TEAM_LIMITS
+        : { ...DEFAULT_TEAM_LIMITS, concurrency_limit: concurrency };
     }
     if (!orgId) throw new Error("The team has no org to read limits for");
 

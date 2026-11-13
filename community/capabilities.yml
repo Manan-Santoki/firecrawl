@@ -328,6 +328,24 @@
       "evidence": "Firecrawl Cloud proxy infrastructure is not open source"
     },
     {
+      "id": "community-dashboard",
+      "group": "Platform",
+      "name": "Community operator dashboard",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "apps/dashboard-community with the authenticated overlay and community/docker-compose.dashboard.yaml; Better Auth accounts in the dashboard schema",
+      "evidence": "Local Docker Compose Playwright run covers bootstrap, invites, per-user teams and keys, request log isolation, enforced credit limits and disable; not yet release-qualified on staging"
+    },
+    {
+      "id": "request-log",
+      "group": "Platform",
+      "name": "Request log and credit metering",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "USE_DB_AUTHENTICATION=true and migration 100-community-metering; SELF_HOSTED_BILLING_MODE=metered for team and API-key credit limits",
+      "evidence": "Request-log middleware and credit-ledger unit and PostgreSQL tests; enforced 402 and 403 paths exercised by the dashboard end-to-end run"
+    },
+    {
       "id": "cloud-dashboard-security",
       "group": "Managed infrastructure",
       "name": "Cloud dashboard and enterprise security controls",

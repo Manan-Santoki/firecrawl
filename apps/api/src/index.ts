@@ -49,6 +49,11 @@ import {
   shutdownPubSubLogging,
 } from "./services/logging/log_job";
 import { notFoundHandler } from "./lib/not-found";
+import {
+  communityRequestLogMiddleware,
+  flushCommunityRequestLog,
+  startCommunityRequestLogRetention,
+} from "./lib/community/request-log";
 
 const { createBullBoard } = require("@bull-board/api");
 const { BullMQAdapter } = require("@bull-board/api/bullMQAdapter");
@@ -149,6 +154,10 @@ app.get("/e2e-test", (_, res) => {
 app.get("/health/liveness", livenessController);
 app.get("/health/readiness", readinessController);
 
+// Community request log: observes every versioned API request after it has
+// answered (no-op unless USE_DB_AUTHENTICATION=true).
+app.use(communityRequestLogMiddleware());
+
 // register router
 app.use(v0Router);
 app.use("/v1", v1Router);
@@ -227,6 +236,8 @@ async function startServer(port = DEFAULT_PORT) {
     logger.info(`Worker ${process.pid} listening on port ${port}`);
   });
 
+  startCommunityRequestLogRetention();
+
   const adminInternalServer =
     config.ADMIN_INTERNAL_PORT !== undefined
       ? startAdminInternalServer(config.ADMIN_INTERNAL_PORT)
@@ -248,6 +259,7 @@ async function startServer(port = DEFAULT_PORT) {
       await adminInternalClosed;
       logger.info("Server closed.");
       await drainZdrRequestLogs();
+      await flushCommunityRequestLog();
       nuqShutdown().finally(() => {
         shutdownWebhookQueue().finally(() => {
           shutdownIndexerQueue().finally(async () => {
