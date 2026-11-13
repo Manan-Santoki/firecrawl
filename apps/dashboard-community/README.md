@@ -16,6 +16,11 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 | Request log | everyone | Filter by time range, endpoint, status, key and (admins) user; full-text search; detail drawer; CSV export. |
 | Jobs | everyone | Crawls and batch scrapes with live progress, cancel through the API, results page. |
 | Usage | everyone | Daily requests and credits by endpoint and by user (admins) or key. |
+| Playground | everyone | Scrape, search, map, crawl, batch scrape, extract and agent with every documented v2 option (formats incl. screenshot/branding/audio/summary/json/highlights, actions builder, location, mobile, proxy, maxAge, lockdown, redactPII, include/exclude tags, waitFor), JSON Schema builder or raw JSON, rendered results (markdown, JSON, screenshot, audio/video, branding swatches, links), copy as curl / Python / JavaScript, private saved history. Runs with a chosen key or the user's internal `Dashboard (internal)` key, so it counts in their usage and limits. |
+| Browser sessions | everyone (admins: all) | List, create, Live View and interactive Live View in an embedded panel, run Node/Python/Bash code, close; saved browser profiles. |
+| Monitors | everyone (admins: all) | List, create, edit, pause/resume, delete, run now, check history and a per-page diff viewer. |
+| Agent runs | everyone (admins: all) | Start, list, live status with steps and Live View, result JSON, cancel, skill export. Shows "Agent backend not available" when the API answers 404/501 for the agent endpoints. |
+| Job detail | everyone | Per-page list with status, view each page's result, download a page or the whole job as JSON. |
 | Service health | everyone | API, workers/queues, RabbitMQ, Redis, both PostgreSQL databases, Playwright, browser service, SearXNG, LLM endpoint and model, embedding model, optional community services. No secrets are shown. |
 | Users | admin | Invite (single-use expiring links), disable/enable, role, limits, new password, per-user usage. |
 | Profile | everyone | Name, password, TOTP 2FA with backup codes, sessions. |
@@ -40,6 +45,7 @@ A small multi-user web app for a self-hosted Firecrawl Community deployment. The
 | `NUQ_DATABASE_URL` | recommended | Queue database, for queue depth and worker health. |
 | `REDIS_URL` / `REDIS_RATE_LIMIT_URL` / `REDIS_EVICT_URL` | recommended | Same Redis as the API: cache invalidation and live crawl progress. |
 | `FIRECRAWL_API_URL` | yes | Internal API URL (`http://api:3002`), used to cancel jobs and read results. Never Firecrawl Cloud. |
+| `FIRECRAWL_PUBLIC_API_URL` | no | Public API origin shown in snippets and onboarding (defaults to `FIRECRAWL_API_URL`). |
 | `DASHBOARD_ADMIN_TEAM_ID` | no | Team the bootstrap admin adopts (the overlay passes `FIRECRAWL_TEAM_ID`). |
 | `DASHBOARD_INVITE_TTL_HOURS` | no | Default invite lifetime (72). |
 | `DASHBOARD_TRUSTED_ORIGINS` | no | Extra allowed origins, comma separated. |

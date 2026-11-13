@@ -1,5 +1,5 @@
 import "server-only";
-import { teamApiKeyForActions } from "./api-keys";
+import { actingKey } from "./acting-key";
 import { audit } from "./audit";
 import { assertCanManageTeam, ForbiddenError, resolveScope, scopeClause, type Viewer } from "./authz";
 import { query } from "./db";
@@ -167,8 +167,7 @@ function jobPath(kind: JobKind, id: string): string {
 export async function cancelJob(viewer: Viewer, jobId: string): Promise<void> {
   const job = await findJob(viewer, jobId);
   if (!job) throw new ForbiddenError("Job not found.");
-  const apiKey = await teamApiKeyForActions(job.teamId);
-  if (!apiKey) throw new Error("The job's owner has no API key left to act with.");
+  const apiKey = (await actingKey(viewer, { teamId: job.teamId })).key;
   await firecrawlRequest(apiKey, jobPath(job.kind, jobId), { method: "DELETE" });
   await audit(viewer.userId, "job.cancelled", { teamId: job.teamId }, { jobId });
 }
@@ -188,8 +187,7 @@ export type JobResultsPage = {
 export async function jobResults(viewer: Viewer, jobId: string, skip = 0): Promise<JobResultsPage & { kind: JobKind }> {
   const job = await findJob(viewer, jobId);
   if (!job) throw new ForbiddenError("Job not found.");
-  const apiKey = await teamApiKeyForActions(job.teamId);
-  if (!apiKey) throw new Error("The job's owner has no API key left to act with.");
+  const apiKey = (await actingKey(viewer, { teamId: job.teamId })).key;
   const page = await firecrawlRequest<JobResultsPage>(apiKey, `${jobPath(job.kind, jobId)}?skip=${skip}&limit=25`);
   let errors: Array<Record<string, unknown>> = [];
   try {

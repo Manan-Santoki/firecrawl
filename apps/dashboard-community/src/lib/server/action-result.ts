@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ForbiddenError } from "./authz";
 import { FirecrawlApiError } from "./firecrawl-api";
 
-export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
+export type ActionResult<T = undefined> = { ok: true; data: T } | { ok: false; error: string; code?: "agent_unavailable" };
 
 /**
  * Runs a server action body and turns expected failures into a message the
@@ -15,6 +15,9 @@ export async function runAction<T>(fn: () => Promise<T>): Promise<ActionResult<T
     return { ok: true, data: await fn() };
   } catch (error) {
     if (error instanceof ForbiddenError) return { ok: false, error: error.message };
+    if (error instanceof Error && error.name === "AgentUnavailableError") {
+      return { ok: false, code: "agent_unavailable", error: "The agent backend is not available on this deployment." };
+    }
     if (error instanceof z.ZodError) return { ok: false, error: error.issues[0]?.message ?? "Invalid input." };
     if (error instanceof FirecrawlApiError) return { ok: false, error: `Firecrawl API: ${error.message}` };
     if (error instanceof Error && error.name === "AccountError") return { ok: false, error: error.message };

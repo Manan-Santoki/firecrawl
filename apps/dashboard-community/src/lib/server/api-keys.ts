@@ -134,15 +134,3 @@ export async function setApiKeyLimits(
   await invalidateAuthCache([{ id: key.id, key: key.key }], key.team_id ?? undefined);
   await audit(viewer.userId, "api_key.limits_updated", { teamId: key.team_id }, { apiKeyId: id, ...limits });
 }
-
-/**
- * A key the dashboard uses to call the Firecrawl API on behalf of a team
- * (cancel a crawl, read its results). Only server code sees it.
- */
-export async function teamApiKeyForActions(teamId: string): Promise<string | null> {
-  const rows = await query<{ key: string }>(
-    `SELECT key::text AS key FROM public.api_keys WHERE team_id = $1::uuid ORDER BY id LIMIT 1`,
-    [teamId],
-  );
-  return rows[0] ? formatApiKey(rows[0].key) : null;
-}

@@ -51,7 +51,7 @@ function buildAuth() {
       window: 60,
       max: 100,
       customRules: {
-        "/sign-in/email": { window: 60, max: 5 },
+        "/sign-in/email": { window: 60, max: config.DASHBOARD_LOGIN_RATE_LIMIT },
         "/two-factor/verify-totp": { window: 60, max: 5 },
         "/two-factor/verify-backup-code": { window: 60, max: 5 },
         "/change-password": { window: 60, max: 5 },

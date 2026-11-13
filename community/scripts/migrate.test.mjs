@@ -31,6 +31,7 @@ test("the checked-in manifest discovers every numbered SQL file and verifies che
     "080-auth-chunk-2",
     "100-community-metering",
     "110-dashboard-schema",
+    "120-dashboard-playground",
   ]);
 });
 
@@ -121,6 +122,7 @@ test("status distinguishes pending, applied, baselined, and checksum mismatch", 
     "applied",
     "baselined",
     "checksum-mismatch",
+    "pending",
     "pending",
     "pending",
     "pending",

@@ -25,10 +25,14 @@ const schema = z.object({
   REDIS_RATE_LIMIT_URL: optionalString,
   REDIS_EVICT_URL: optionalString,
   FIRECRAWL_API_URL: z.url(),
+  // Public API origin shown in snippets and onboarding (defaults to FIRECRAWL_API_URL).
+  FIRECRAWL_PUBLIC_API_URL: optionalUrl,
   // The team the bootstrap admin adopts, normally the seeded FIRECRAWL_TEAM_ID.
   DASHBOARD_ADMIN_TEAM_ID: optionalString,
   DASHBOARD_INVITE_TTL_HOURS: z.coerce.number().int().positive().default(72),
   DASHBOARD_TRUSTED_ORIGINS: optionalString,
+  // Sign-in attempts allowed per IP per minute.
+  DASHBOARD_LOGIN_RATE_LIMIT: z.coerce.number().int().positive().default(5),
   // Health probes (never displayed, only their reachability).
   RABBITMQ_MANAGEMENT_URL: optionalUrl,
   NUQ_RABBITMQ_URL: optionalString,

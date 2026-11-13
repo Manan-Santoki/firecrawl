@@ -44,10 +44,10 @@ export const NAV: NavGroup[] = [
   {
     label: "Build",
     items: [
-      { title: "Playground", href: "/playground", icon: "playground", soon: "v2" },
-      { title: "Browser sessions", href: "/browser", icon: "browser", soon: "v2" },
-      { title: "Monitors", href: "/monitors", icon: "monitors", soon: "v2" },
-      { title: "Agent runs", href: "/agent", icon: "agent", soon: "v2" },
+      { title: "Playground", href: "/playground", icon: "playground" },
+      { title: "Browser sessions", href: "/browser", icon: "browser" },
+      { title: "Monitors", href: "/monitors", icon: "monitors" },
+      { title: "Agent runs", href: "/agent", icon: "agent" },
     ],
   },
   {
