@@ -3,6 +3,7 @@ import {
   describeIf,
   ALLOW_TEST_SUITE_WEBSITE,
   TEST_SELF_HOST,
+  TEST_SUITE_WEBSITE,
 } from "../lib";
 import {
   idmux,
@@ -30,6 +31,62 @@ describeIf(ALLOW_TEST_SUITE_WEBSITE && !TEST_SELF_HOST)("/v2/monitor", () => {
       credits: 1000000,
     });
   }, 10000);
+
+  it(
+    "reserves the known PDF page cost before a repeat monitor run",
+    async () => {
+      const create = await monitorCreateRaw(
+        {
+          name: "PDF reservation monitor",
+          schedule: { cron: "0 * * * *", timezone: "UTC" },
+          targets: [
+            {
+              type: "scrape",
+              urls: [
+                `${TEST_SUITE_WEBSITE}/example-long.pdf?testId=${crypto.randomUUID()}`,
+              ],
+              scrapeOptions: { formats: ["markdown"] },
+            },
+          ],
+          notification: { email: { enabled: false } },
+        },
+        identity,
+      );
+      expect(create.statusCode).toBe(200);
+      const monitorId = create.body.data.id;
+      const runToCompletion = async () => {
+        const run = await monitorRunRaw(monitorId, identity);
+        expect(run.statusCode).toBe(200);
+        let check: any;
+        for (let i = 0; i < 90; i++) {
+          const raw = await monitorCheckRaw(monitorId, run.body.id, identity);
+          expect(raw.statusCode).toBe(200);
+          check = raw.body.data;
+          if (
+            ["completed", "partial", "failed", "skipped_no_credits"].includes(
+              check.status,
+            )
+          )
+            break;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        expect(check.status).toBe("completed");
+        return check;
+      };
+      try {
+        const first = await runToCompletion();
+        expect(first.estimatedCredits).toBe(1);
+        expect(first.actualCredits).toBeGreaterThan(1);
+        const second = await runToCompletion();
+        expect(second.estimatedCredits).toBe(first.actualCredits);
+        expect(second.reservedCredits).toBe(first.actualCredits);
+        expect(second.actualCredits).toBe(first.actualCredits);
+      } finally {
+        await monitorDeleteRaw(monitorId, identity);
+      }
+    },
+    3 * scrapeTimeout,
+  );
 
   it("creates, lists, gets, pauses, and deletes a monitor", async () => {
     const create = await monitorCreateRaw(
@@ -69,6 +126,78 @@ describeIf(ALLOW_TEST_SUITE_WEBSITE && !TEST_SELF_HOST)("/v2/monitor", () => {
     const del = await monitorDeleteRaw(id, identity);
     expect(del.statusCode).toBe(200);
     expect(del.body.success).toBe(true);
+  });
+
+  describe("when the team requires zero data retention for search", () => {
+    let searchZdr: Identity;
+
+    beforeAll(async () => {
+      searchZdr = await idmux({
+        name: "monitor/search-zdr",
+        credits: 10000,
+        flags: { searchZDR: "forced-zdr" },
+      });
+    }, 10000);
+
+    it("refuses a search monitor", async () => {
+      const create = await monitorCreateRaw(
+        {
+          name: "search zdr monitor",
+          schedule: { cron: "0 * * * *", timezone: "UTC" },
+          goal: "New releases of the firecrawl SDK",
+          targets: [{ type: "search", queries: ["firecrawl sdk release"] }],
+          notification: { email: { enabled: false } },
+        },
+        searchZdr,
+      );
+
+      expect(create.statusCode).toBe(400);
+      expect(create.body.success).toBe(false);
+      expect(create.body.error).toContain("zero data retention");
+    });
+
+    it("keeps a scrape monitor and refuses adding a search target to it", async () => {
+      const create = await monitorCreateRaw(
+        {
+          name: "scrape monitor on a search zdr team",
+          schedule: { cron: "0 * * * *", timezone: "UTC" },
+          targets: [
+            {
+              type: "scrape",
+              urls: [createTestIdUrl()],
+              scrapeOptions: { formats: ["markdown"] },
+            },
+          ],
+          notification: { email: { enabled: false } },
+        },
+        searchZdr,
+      );
+      expect(create.statusCode).toBe(200);
+      const id = create.body.data.id;
+
+      try {
+        const addSearch = await monitorPatchRaw(
+          id,
+          {
+            goal: "New releases of the firecrawl SDK",
+            targets: [{ type: "search", queries: ["firecrawl sdk release"] }],
+          },
+          searchZdr,
+        );
+        expect(addSearch.statusCode).toBe(400);
+        expect(addSearch.body.error).toContain("zero data retention");
+
+        const pause = await monitorPatchRaw(
+          id,
+          { status: "paused" },
+          searchZdr,
+        );
+        expect(pause.statusCode).toBe(200);
+        expect(pause.body.data.status).toBe("paused");
+      } finally {
+        await monitorDeleteRaw(id, searchZdr);
+      }
+    });
   });
 
   it("accepts an origin field in the create body", async () => {

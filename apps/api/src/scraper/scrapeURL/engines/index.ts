@@ -21,11 +21,6 @@ import {
   wikipediaMaxReasonableTime,
   isWikimediaUrl,
 } from "./wikipedia";
-import {
-  scrapeURLWithXTwitter,
-  xTwitterMaxReasonableTime,
-  isXTwitterUrl,
-} from "./x-twitter";
 import { queryEngpickerVerdict, useIndex } from "../../../services";
 import { useFireEngine } from "./fire-engine/available";
 import { hasFormatOfType } from "../../../lib/format-utils";
@@ -33,6 +28,7 @@ import {
   getPDFBlocks,
   getPDFPageMarkdown,
   getPDFPageMarkers,
+  getPDFRefresh,
 } from "../../../controllers/v2/types";
 import type { PdfMetadata, PdfPageBlocks } from "./pdf/types";
 import { BrandingProfile } from "../../../types/branding";
@@ -40,10 +36,16 @@ import {
   AgentIndexOnlyError,
   BrandingNotSupportedError,
   NoCachedDataError,
+  UsOnlyUnavailableError,
 } from "../error";
 import { isUrlBlocked } from "../../WebScraper/utils/blocklist";
+import { isUsOnly } from "../../../lib/us-only";
+import { isXTwitterUrl } from "../../../lib/x-twitter-url";
+import { hasCustomRequestContext } from "../lib/request-context";
 import {
-  canUseExchangeForRequest,
+  getExchangeAccessForRequest,
+  ThirdPartyDataTermsRequiredError,
+  ThirdPartyDataUnsupportedOptionError,
   type ExchangeScrapeMetadata,
 } from "../../../lib/exchange";
 
@@ -62,8 +64,7 @@ export type Engine =
   | "image"
   | "index"
   | "index;documents"
-  | "wikipedia"
-  | "x-twitter";
+  | "wikipedia";
 
 const usePlaywright =
   config.PLAYWRIGHT_MICROSERVICE_URL !== "" &&
@@ -73,12 +74,8 @@ const useWikipedia =
   config.WIKIPEDIA_ENTERPRISE_USERNAME !== "" &&
   config.WIKIPEDIA_ENTERPRISE_PASSWORD !== undefined &&
   config.WIKIPEDIA_ENTERPRISE_PASSWORD !== "";
-const useXTwitter =
-  (config.XAI_API_KEY !== undefined && config.XAI_API_KEY !== "") ||
-  config.USE_DB_AUTHENTICATION === true;
 
 const engines: Engine[] = [
-  ...(useXTwitter ? ["x-twitter" as const] : []),
   ...(useWikipedia ? ["wikipedia" as const] : []),
   ...(useIndex ? ["index" as const, "index;documents" as const] : []),
   ...(useFireEngine
@@ -96,8 +93,8 @@ const engines: Engine[] = [
   "pdf",
   "document",
   // Image OCR needs FirePDF; without it the engine would only be a wasted
-  // tail download on every failed scrape. Per-team enablement is decided
-  // where images are routed (the imageOcr team flag), not here.
+  // tail download on every failed scrape. Whether images are actually OCR'd
+  // is decided where they are routed (lib/image-ocr-gate.ts), not here.
   ...(config.FIRE_PDF_BASE_URL ? ["image" as const] : []),
 ];
 
@@ -155,7 +152,6 @@ export type EngineScrapeResult = {
   markdown?: string;
   pages?: Array<{ pageNumber: number; markdown: string }>;
   blocks?: PdfPageBlocks[];
-  json?: unknown;
   statusCode: number;
   error?: string;
 
@@ -171,6 +167,10 @@ export type EngineScrapeResult = {
   };
 
   branding?: BrandingProfile;
+  /** First-screen screenshot taken for Jev's branding call; internal, never
+   * returned (see the branding format's __experimental_screenshot and
+   * BRANDING_JEV_SCREENSHOT_PERCENT). */
+  brandingScreenshot?: string;
 
   pdfMetadata?: PdfMetadata;
 
@@ -182,6 +182,7 @@ export type EngineScrapeResult = {
 
   youtubeTranscriptContent?: any;
   postprocessorsUsed?: string[];
+  warning?: string;
   audioCookies?: BrowserCookie[];
 
   proxyUsed: "basic" | "stealth";
@@ -207,7 +208,6 @@ const engineHandlers: {
   document: scrapeDocument,
   image: scrapeImage,
   wikipedia: scrapeURLWithWikipedia,
-  "x-twitter": scrapeURLWithXTwitter,
 };
 
 const engineMRTs: {
@@ -234,7 +234,6 @@ const engineMRTs: {
   document: documentMaxReasonableTime,
   image: imageMaxReasonableTime,
   wikipedia: wikipediaMaxReasonableTime,
-  "x-twitter": xTwitterMaxReasonableTime,
 };
 
 const engineOptions: {
@@ -491,9 +490,8 @@ const engineOptions: {
   },
   // The file engines (pdf, document, image) pass skipTlsVerification through
   // to their direct downloads, and a browser handoff already applied it
-  // upstream, so they declare it supported: otherwise every cache-miss file
-  // scrape carries a misleading "may be partial" warning, since v2 defaults
-  // the option to true.
+  // upstream, so they declare it supported: otherwise every file scrape that
+  // sets it carries a misleading "may be partial" warning.
   pdf: {
     features: {
       actions: false,
@@ -582,28 +580,6 @@ const engineOptions: {
     },
     quality: 500, // below index (1000) so cache is tried first, above fire-engine (50)
   },
-  "x-twitter": {
-    features: {
-      actions: false,
-      waitFor: false,
-      screenshot: false,
-      "screenshot@fullScreen": false,
-      pdf: false,
-      document: false,
-      image: false,
-      audio: false,
-      video: false,
-      atsv: false,
-      location: false,
-      mobile: false,
-      skipTlsVerification: true,
-      useFastMode: true,
-      stealthProxy: false,
-      branding: false,
-      disableAdblock: true,
-    },
-    quality: 1500,
-  },
 };
 
 export function shouldUseIndex(meta: Meta) {
@@ -629,10 +605,12 @@ export function shouldUseIndex(meta: Meta) {
     !getPDFPageMarkers(meta.options.parsers) &&
     !hasCustomScreenshotSettings &&
     meta.options.maxAge !== 0 &&
-    (meta.options.headers === undefined ||
-      Object.keys(meta.options.headers).length === 0) &&
-    (meta.options.actions === undefined || meta.options.actions.length === 0) &&
-    meta.options.profile === undefined
+    // A PDF refresh asks for a fresh parse; a URL index copy is the parse
+    // being refreshed, so serving it would silently ignore the request.
+    !(
+      config.INDEX_SKIP_ON_PDF_REFRESH && getPDFRefresh(meta.options.parsers)
+    ) &&
+    !hasCustomRequestContext(meta.options)
   );
 }
 
@@ -667,27 +645,71 @@ export async function buildFallbackList(meta: Meta): Promise<
     !meta.internalOptions.agentIndexOnly &&
     meta.internalOptions.forceEngine === undefined
   ) {
-    if (
-      await canUseExchangeForRequest({
-        url: meta.rewrittenUrl ?? meta.url,
-        formats: meta.options.formats,
-        actions: meta.options.actions,
-        headers: meta.options.headers,
-        waitFor: meta.options.waitFor,
-        mobile: meta.options.mobile,
-        location: meta.options.location,
-        proxy: meta.options.proxy,
-        blockAds: meta.options.blockAds,
-        profile: meta.options.profile,
-        atsv: meta.internalOptions.atsv,
-        minAge: meta.options.minAge,
-        includeTags: meta.options.includeTags,
-        excludeTags: meta.options.excludeTags,
-        zeroDataRetention: meta.internalOptions.zeroDataRetention,
-        lockdown: meta.options.lockdown,
-        flags: meta.internalOptions.teamFlags ?? null,
-      })
-    ) {
+    const url = meta.rewrittenUrl ?? meta.url;
+    const betaTeam =
+      meta.internalOptions.teamFlags?.professionalProfileCompanyDataBeta ===
+      true;
+    let blocked = false;
+    try {
+      blocked = isUrlBlocked(url, meta.internalOptions.teamFlags ?? null, {
+        team_id: meta.internalOptions.teamId ?? null,
+        org_id: meta.internalOptions.orgId ?? null,
+        origin: null,
+        record: false,
+      });
+    } catch (error) {
+      // Beta teams fail closed, as they always have. Anyone else keeps the
+      // normal engines, since an unreadable blocklist must not fail every
+      // scrape.
+      if (betaTeam) {
+        meta.logger.warn("Exchange blocklist check failed; failing closed", {
+          error,
+        });
+        return [];
+      }
+    }
+
+    // X posts and profiles only the Exchange serves, as blocked URLs (LinkedIn
+    // profiles) are: a normal engine gets X's login wall. A profile or lockdown
+    // scrape keeps the normal engines, as it did with Firecrawl's own X engine.
+    const xTwitterPage =
+      isXTwitterUrl(url) &&
+      meta.options.profile === undefined &&
+      !meta.options.lockdown;
+
+    // They are answered by xAI, which is outside the US-only guarantee.
+    if (xTwitterPage && isUsOnly(meta.internalOptions.teamFlags ?? undefined)) {
+      throw new UsOnlyUnavailableError(
+        "X/Twitter scraping is not available for teams restricted to US-only processing.",
+      );
+    }
+
+    const exchangeAccess = await getExchangeAccessForRequest({
+      url,
+      teamId: meta.internalOptions.teamId ?? null,
+      orgId: meta.internalOptions.orgId ?? null,
+      blocked: blocked || xTwitterPage,
+      origin: meta.internalOptions.origin ?? null,
+      formats: meta.options.formats,
+      actions: meta.options.actions,
+      headers: meta.options.headers,
+      waitFor: meta.options.waitFor,
+      mobile: meta.options.mobile,
+      location: meta.options.location,
+      proxy: meta.options.proxy,
+      blockAds: meta.options.blockAds,
+      profile: meta.options.profile,
+      atsv: meta.internalOptions.atsv,
+      minAge: meta.options.minAge,
+      includeTags: meta.options.includeTags,
+      excludeTags: meta.options.excludeTags,
+      zeroDataRetention: meta.internalOptions.zeroDataRetention,
+      lockdown: meta.options.lockdown,
+      redactPII: meta.options.redactPII,
+      flags: meta.internalOptions.teamFlags ?? null,
+    });
+    if (exchangeAccess.allowed) {
+      meta.exchangeProviderId = exchangeAccess.provider.id;
       return [
         {
           engine: "exchange",
@@ -696,37 +718,22 @@ export async function buildFallbackList(meta: Meta): Promise<
       ];
     }
 
-    // A blocked URL can only have been admitted by the Exchange bypass in
-    // blocklistMiddleware, which only applies to flagged orgs; if the
-    // Exchange is no longer usable by execution time (catalog changed,
-    // service down), fail closed rather than letting normal engines scrape
-    // a blocklisted site. An error here also fails closed: this branch only
-    // runs for flagged orgs, and a retryable scrape failure is preferable
-    // to scraping a potentially blocklisted site with normal engines.
-    if (
-      meta.internalOptions.teamFlags?.professionalProfileCompanyDataBeta ===
-      true
-    ) {
-      try {
-        if (
-          isUrlBlocked(
-            meta.rewrittenUrl ?? meta.url,
-            meta.internalOptions.teamFlags ?? null,
-            {
-              team_id: meta.internalOptions.teamId ?? null,
-              org_id: meta.internalOptions.orgId ?? null,
-              origin: null,
-            },
-          )
-        ) {
-          return [];
-        }
-      } catch (error) {
-        meta.logger.warn("Exchange blocklist re-check failed; failing closed", {
-          error,
-        });
-        return [];
+    // A blocked URL can only have been admitted (by scrapeBlocklistMiddleware
+    // or batch scrape) for the Exchange; if it can no longer serve it (catalog
+    // changed, service down), fail closed rather than letting normal engines
+    // scrape a blocklisted site. X posts and profiles fail the same way.
+    // Other URLs whose provider wants unaccepted terms or rejects an option
+    // fall through and scrape normally.
+    if (blocked || xTwitterPage) {
+      if (exchangeAccess.termsRequired) {
+        throw new ThirdPartyDataTermsRequiredError(exchangeAccess.terms);
       }
+      if (exchangeAccess.unsupportedOption !== undefined) {
+        throw new ThirdPartyDataUnsupportedOptionError(
+          exchangeAccess.unsupportedOption,
+        );
+      }
+      return [];
     }
   }
 
@@ -767,10 +774,11 @@ export async function buildFallbackList(meta: Meta): Promise<
     if (
       getPDFPageMarkdown(meta.options.parsers) ||
       getPDFBlocks(meta.options.parsers) ||
-      getPDFPageMarkers(meta.options.parsers)
+      getPDFPageMarkers(meta.options.parsers) ||
+      (config.INDEX_SKIP_ON_PDF_REFRESH && getPDFRefresh(meta.options.parsers))
     ) {
       meta.logger.warn(
-        "agentIndexOnly request demands pageMarkdown/blocks/pageMarkers, which the URL index cannot serve",
+        "agentIndexOnly request demands pageMarkdown/blocks/pageMarkers or a PDF refresh, which the URL index cannot serve",
         { parsers: meta.options.parsers },
       );
       throw new AgentIndexOnlyError();
@@ -934,20 +942,18 @@ export async function buildFallbackList(meta: Meta): Promise<
     }
   }
 
-  if (isXTwitterUrl(meta.url) && _engines.includes("x-twitter")) {
-    _engines.length = 0;
-    _engines.push("x-twitter");
-  } else if (!isXTwitterUrl(meta.url)) {
-    const xTwitterIndex = _engines.indexOf("x-twitter");
-    if (xTwitterIndex !== -1) {
-      _engines.splice(xTwitterIndex, 1);
-    }
-  }
+  // Without fire-engine (or its test mocks), no engine fetches a page through
+  // a stealth proxy: only index lookups and the file parsers declare
+  // stealthProxy support. Counting the flag would leave only the file parsers
+  // above the threshold and in the stealth-only narrowing below, so an HTML
+  // page that escalated to stealthProxy would fail on every engine.
+  const scoresStealthProxy = useFireEngine || meta.mock !== null;
+  const isScoredFlag = (flag: FeatureFlag) =>
+    scoresStealthProxy || flag !== "stealthProxy";
 
-  const prioritySum = [...meta.featureFlags].reduce(
-    (a, x) => a + featureFlagOptions[x].priority,
-    0,
-  );
+  const prioritySum = [...meta.featureFlags]
+    .filter(isScoredFlag)
+    .reduce((a, x) => a + featureFlagOptions[x].priority, 0);
   const priorityThreshold = Math.floor(prioritySum / 2);
   let selectedEngines: {
     engine: Engine;
@@ -963,6 +969,22 @@ export async function buildFallbackList(meta: Meta): Promise<
       : _engines;
 
   for (const engine of currentEngines) {
+    // Zero data retention scrapes, forced engines included, never use the
+    // Wikipedia engine: they stay on the engines that fetch the page directly.
+    if (engine === "wikipedia" && meta.internalOptions.zeroDataRetention)
+      continue;
+
+    // A profile must never fall back to fetching anonymous content. File parsers
+    // may consume bytes already fetched by the authenticated browser.
+    if (
+      meta.options.profile &&
+      !engine.includes("chrome-cdp") &&
+      !(engine === "pdf" && meta.pdfPrefetch) &&
+      !(engine === "document" && meta.documentPrefetch) &&
+      !(engine === "image" && meta.imagePrefetch)
+    )
+      continue;
+
     const supportedFlags = new Set([
       ...Object.entries(engineOptions[engine].features)
         .filter(
@@ -970,10 +992,9 @@ export async function buildFallbackList(meta: Meta): Promise<
         )
         .map(([k, _]) => k),
     ]);
-    const supportScore = [...supportedFlags].reduce(
-      (a, x) => a + featureFlagOptions[x].priority,
-      0,
-    );
+    const supportScore = [...supportedFlags]
+      .filter(isScoredFlag)
+      .reduce((a, x) => a + featureFlagOptions[x].priority, 0);
 
     const unsupportedFeatures = new Set([...meta.featureFlags]);
     for (const flag of meta.featureFlags) {
@@ -994,7 +1015,7 @@ export async function buildFallbackList(meta: Meta): Promise<
   // silently ignoring the user's request and never attempting stealth.
   // The guard keeps the original list if no stealth-capable engine qualified
   // (e.g. self-hosted without fire-engine) so scrapes don't break entirely.
-  if (meta.featureFlags.has("stealthProxy")) {
+  if (scoresStealthProxy && meta.featureFlags.has("stealthProxy")) {
     const stealthCapable = selectedEngines.filter(
       x => !x.unsupportedFeatures.has("stealthProxy"),
     );

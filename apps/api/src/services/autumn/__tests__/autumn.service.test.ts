@@ -3,7 +3,10 @@
  *
  * All external I/O is mocked:
  *   - autumnClient  →  vi.fn() stubs on customers / entities / track
- *   - dbRr          →  stubbed Drizzle query builder
+ *   - dbRr          →  stubbed Drizzle query builder (gateway lookup only)
+ *
+ * There is deliberately no getACUCTeam mock: the service cannot reach it, and
+ * every org below is one the caller hands in.
  */
 
 import { vi } from "vitest";
@@ -18,6 +21,7 @@ const {
   mockCheck,
   mockFinalize,
   mockGetOrCreate,
+  mockCustomerGet,
   mockEntityGet,
   mockEntityCreate,
   mockAutumnClient,
@@ -36,43 +40,29 @@ const {
   const mockGetOrCreate = vi
     .fn<(args: any) => Promise<unknown>>()
     .mockResolvedValue({ id: "org-1" });
+  const mockCustomerGet = vi.fn<(args: any) => Promise<unknown>>();
   const mockEntityGet = vi.fn<(args: any) => Promise<unknown>>();
   const mockEntityCreate = vi.fn<(args: any) => Promise<unknown>>();
 
   const mockAutumnClient = {
-    customers: { getOrCreate: mockGetOrCreate },
+    customers: { getOrCreate: mockGetOrCreate, get: mockCustomerGet },
     entities: { get: mockEntityGet, create: mockEntityCreate },
     balances: { finalize: mockFinalize },
     check: mockCheck,
     track: mockTrack,
   };
 
-  // Minimal Drizzle query-builder stub: .select().from().where().limit() → rows.
-  //
-  // Table-aware by the selected columns, because two different lookups share it:
-  // the team → org_id resolution, and the gateway-provisioning check. Returning
-  // one row for both would make every team look partner-provisioned.
-  const makeDbStub = (
-    data: unknown,
-    gatewayRow: unknown,
-    gatewayThrows = false,
-  ) => ({
-    select: (fields?: Record<string, unknown>) => {
-      const isGatewayLookup = !!fields && "team_id" in fields;
-      if (isGatewayLookup && gatewayThrows) {
+  // Minimal Drizzle query-builder stub for the one lookup still on the
+  // replica: .select().from().where().limit() → the gateway-provisioning rows.
+  const makeDbStub = (gatewayRow: unknown, gatewayThrows = false) => ({
+    select: () => {
+      if (gatewayThrows) {
         throw new Error("replica unavailable");
       }
-      const rows = isGatewayLookup
-        ? gatewayRow
-          ? [gatewayRow]
-          : []
-        : data
-          ? [data]
-          : [];
       return {
         from: () => ({
           where: () => ({
-            limit: () => Promise.resolve(rows),
+            limit: () => Promise.resolve(gatewayRow ? [gatewayRow] : []),
           }),
         }),
       };
@@ -84,6 +74,7 @@ const {
     mockCheck,
     mockFinalize,
     mockGetOrCreate,
+    mockCustomerGet,
     mockEntityGet,
     mockEntityCreate,
     mockAutumnClient,
@@ -92,10 +83,6 @@ const {
     // simulate a missing API key).
     state: {
       autumnClientRef: mockAutumnClient as typeof mockAutumnClient | null,
-      supabaseStubData: { data: { org_id: "org-1" }, error: null } as {
-        data: unknown;
-        error: unknown;
-      },
       // Row the partner_provisioned_accounts lookup finds. null = not
       // which is what almost every team is.
       gatewayStubRow: null as unknown,
@@ -112,13 +99,18 @@ vi.mock("../client", () => ({
   },
 }));
 
+// An unanswered firebill track is handed to a Redis-backed retry queue; no
+// Redis here, so the hand-off is accepted and dropped.
+const { retryQueueAdd } = vi.hoisted(() => ({
+  retryQueueAdd: vi.fn(async (_name: string, _data: unknown) => undefined),
+}));
+vi.mock("../../queue-service", () => ({
+  getFirebillTrackRetryQueue: () => ({ add: retryQueueAdd }),
+}));
+
 vi.mock("../../../db/connection", () => ({
   get dbRr() {
-    return makeDbStub(
-      state.supabaseStubData.data,
-      state.gatewayStubRow,
-      state.gatewayStubThrows,
-    );
+    return makeDbStub(state.gatewayStubRow, state.gatewayStubThrows);
   },
 }));
 
@@ -126,7 +118,7 @@ vi.mock("../../../config", () => ({
   // Stubbed so importing the real config (which parses env) is avoided.
   // A getter so individual tests can swap the config (e.g. firebill routing).
   get config() {
-    return state.configRef;
+    return { ...state.configRef };
   },
 }));
 
@@ -146,6 +138,39 @@ function makeService() {
   return new AutumnService();
 }
 
+const FIREBILL_CONFIG = {
+  FIREBILL_URL: "http://firebill.test",
+  FIREBILL_SECRET: "fb-secret",
+};
+
+const mockFetch = vi.fn<(url: any, init?: any) => Promise<Response>>();
+
+/**
+ * Configures firebill for the enclosing describe and answers every request
+ * with `answer`, in a fresh Response each time (firebill reads the body, and a
+ * reused one looks like a failure and triggers its retry).
+ */
+function useFirebill(answer: Record<string, unknown>) {
+  beforeEach(() => {
+    state.configRef = { ...FIREBILL_CONFIG };
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(
+      async () => new Response(JSON.stringify(answer), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+}
+
+const firebillPaths = () =>
+  mockFetch.mock.calls.map(([url]) => new URL(String(url)).pathname);
+
+const firebillBodies = () =>
+  mockFetch.mock.calls.map(([, init]) => JSON.parse(init.body));
+
 function makeEntity(usage: number) {
   return { balances: { CREDITS: { usage } } };
 }
@@ -157,7 +182,6 @@ function makeEntity(usage: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.autumnClientRef = mockAutumnClient;
-  state.supabaseStubData = { data: { org_id: "org-1" }, error: null };
   state.configRef = {};
   mockCheck.mockResolvedValue({
     allowed: true,
@@ -167,6 +191,7 @@ beforeEach(() => {
   mockFinalize.mockResolvedValue(undefined);
   mockEntityGet.mockResolvedValue(makeEntity(0));
   mockEntityCreate.mockResolvedValue({ id: "team-1" });
+  mockCustomerGet.mockResolvedValue({ subscriptions: [] });
 });
 
 // ---------------------------------------------------------------------------
@@ -221,110 +246,78 @@ describe("BoundedSet eviction", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ensureTeamProvisioned
+// Org moves: the caller names the org on every billing call, so a move follows
+// it.
 // ---------------------------------------------------------------------------
 
-describe("ensureTeamProvisioned", () => {
-  it("skips all HTTP calls for preview teams", async () => {
+describe("team org change", () => {
+  useFirebill({ success: true, allowed: true, remaining: 0 });
+
+  it("bills the new org", async () => {
     const svc = makeService();
-    await svc.ensureTeamProvisioned({ teamId: "preview_abc", orgId: "org-1" });
-    expect(mockEntityGet).not.toHaveBeenCalled();
-    expect(mockEntityCreate).not.toHaveBeenCalled();
+
+    await svc.trackCredits({ teamId: "team-1", orgId: "org-1", value: 1 });
+    await svc.trackCredits({ teamId: "team-1", orgId: "org-2", value: 1 });
+
+    expect(firebillBodies().map(body => body.customer_id)).toEqual([
+      "org-1",
+      "org-2",
+    ]);
   });
 
-  it("skips getEntity when team is already in ensuredTeams cache", async () => {
+  it("checkCredits follows the org move too", async () => {
     const svc = makeService();
-    // First call — populates cache.
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-    const callsAfterFirst = mockEntityGet.mock.calls.length;
 
-    // Second call — should be a no-op.
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-    expect(mockEntityGet.mock.calls.length).toBe(callsAfterFirst);
-  });
+    await svc.checkCredits({ teamId: "team-1", orgId: "org-1", value: 1 });
+    await svc.checkCredits({ teamId: "team-1", orgId: "org-2", value: 1 });
 
-  it("marks team as ensured without a second getEntity when entity already exists", async () => {
-    const svc = makeService();
-    mockEntityGet.mockResolvedValue(makeEntity(10));
-
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-
-    // getEntity called once (existence check), createEntity never called.
-    expect(mockEntityGet).toHaveBeenCalledTimes(1);
-    expect(mockEntityCreate).not.toHaveBeenCalled();
-
-    // Second call — team is cached, zero additional HTTP calls.
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-    expect(mockEntityGet).toHaveBeenCalledTimes(1);
-  });
-
-  it("marks team as ensured without a second getEntity when createEntity succeeds", async () => {
-    const svc = makeService();
-    // First getEntity returns null → entity doesn't exist yet.
-    mockEntityGet.mockResolvedValue(null);
-    mockEntityCreate.mockResolvedValue({ id: "team-1" });
-
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-
-    // Only one getEntity call (no confirmation get).
-    expect(mockEntityGet).toHaveBeenCalledTimes(1);
-    expect(mockEntityCreate).toHaveBeenCalledTimes(1);
-    expect(mockEntityCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ featureId: "TEAM" }),
-    );
-  });
-
-  it("marks team as ensured on 409 conflict without a second getEntity", async () => {
-    const svc = makeService();
-    mockEntityGet.mockResolvedValue(null);
-    // createEntity returns null to simulate 409 — the mock throws a 409 error
-    // to exercise the conflict branch inside createEntity.
-    mockEntityCreate.mockRejectedValue(
-      Object.assign(new Error("conflict"), { status: 409 }),
-    );
-
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-
-    expect(mockEntityGet).toHaveBeenCalledTimes(1);
-    // Team should still be marked as ensured (entity exists, just raced).
-    // Verify by checking that a second provisioning call makes zero HTTP requests.
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-    expect(mockEntityGet).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT mark team as ensured when createEntity has a genuine error", async () => {
-    const svc = makeService();
-    mockEntityGet.mockResolvedValue(null);
-    mockEntityCreate.mockRejectedValue(
-      Object.assign(new Error("server error"), { status: 500 }),
-    );
-
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-
-    // Second call must re-attempt (team not cached).
-    await svc.ensureTeamProvisioned({ teamId: "team-1", orgId: "org-1" });
-    expect(mockEntityGet).toHaveBeenCalledTimes(2);
+    expect(firebillBodies().map(body => body.customer_id)).toEqual([
+      "org-1",
+      "org-2",
+    ]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// ensureTrackingContext short-circuit (both caches warm)
+// Billing needs firebill, and only firebill: no Autumn client is consulted.
 // ---------------------------------------------------------------------------
 
-describe("ensureTrackingContext warm-cache short-circuit", () => {
-  it("makes zero provisioning HTTP calls when both caches are warm", async () => {
+describe("billing without an Autumn client", () => {
+  useFirebill({
+    success: true,
+    allowed: true,
+    remaining: 5,
+    lock_id: "lock-1",
+  });
+
+  beforeEach(() => {
+    state.autumnClientRef = null;
+  });
+
+  it("still checks, locks, tracks, refunds and finalizes through firebill", async () => {
     const svc = makeService();
-    mockEntityGet.mockResolvedValue(makeEntity(0));
+    const team = { teamId: "team-1", orgId: "org-1" };
 
-    // Warm the caches.
-    await svc.trackCredits({ teamId: "team-1", value: 5 });
-    const callsAfterWarm = mockEntityGet.mock.calls.length;
+    expect(await svc.checkCredits({ ...team, value: 1 })).toEqual({
+      allowed: true,
+      remaining: 5,
+    });
+    expect(
+      await svc.lockCredits({ ...team, value: 1, lockId: "lock-1" }),
+    ).toEqual({ status: "locked", lockId: "lock-1" });
+    expect(await svc.trackCredits({ ...team, value: 1 })).toBe(true);
+    expect(await svc.refundCredits({ ...team, value: 1 })).toBe(true);
+    expect(
+      await svc.finalizeCreditsLock({ lockId: "lock-1", action: "release" }),
+    ).toBe(true);
 
-    // Subsequent call — should not touch provisioning.
-    await svc.trackCredits({ teamId: "team-1", value: 5 });
-
-    // No additional getEntity calls for provisioning.
-    expect(mockEntityGet.mock.calls.length).toBe(callsAfterWarm);
+    expect(firebillPaths()).toEqual([
+      "/v1/check",
+      "/v1/lock",
+      "/v1/track",
+      "/v1/refund",
+      "/v1/finalize",
+    ]);
   });
 });
 
@@ -333,74 +326,54 @@ describe("ensureTrackingContext warm-cache short-circuit", () => {
 // ---------------------------------------------------------------------------
 
 describe("lockCredits", () => {
-  it("returns skipped when autumnClient is null", async () => {
-    state.autumnClientRef = null;
+  useFirebill({ success: true, allowed: true, lock_id: "monitor_check-1" });
+
+  it("preserves successful zero-credit reservations", async () => {
+    await expect(
+      makeService().lockCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 0,
+        lockId: "monitor_check-1",
+      }),
+    ).resolves.toEqual({ status: "locked", lockId: "monitor_check-1" });
+    expect(firebillBodies()[0]).toMatchObject({ value: 0 });
+  });
+
+  it("returns skipped without asking anyone when firebill is not configured", async () => {
+    state.configRef = {};
     const svc = makeService();
-    const result = await svc.lockCredits({ teamId: "team-1", value: 10 });
+    const result = await svc.lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 10,
+    });
     expect(result).toEqual({ status: "skipped" });
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockCheck).not.toHaveBeenCalled();
+  });
+
+  it("denies a gated hold when firebill is not configured, rather than skipping the gate", async () => {
+    state.configRef = {};
+    const result = await makeService().lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 10,
+      partnerJobToken: "job-token",
+    });
+    expect(result).toEqual({ status: "denied", reason: "gate_unavailable" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns skipped for preview teams", async () => {
     const svc = makeService();
     const result = await svc.lockCredits({
       teamId: "preview_abc",
+      orgId: "org-1",
       value: 10,
     });
     expect(result).toEqual({ status: "skipped" });
-    expect(mockCheck).not.toHaveBeenCalled();
-  });
-
-  it("returns the lockId on happy path", async () => {
-    const svc = makeService();
-
-    const result = await svc.lockCredits({
-      teamId: "team-1",
-      value: 42,
-      lockId: "lock-123",
-      properties: { source: "billTeam", endpoint: "extract" },
-    });
-
-    expect(result).toEqual({ status: "locked", lockId: "lock-123" });
-    expect(mockCheck).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customerId: "org-1",
-        entityId: "team-1",
-        featureId: "CREDITS",
-        requiredBalance: 42,
-        properties: { source: "billTeam", endpoint: "extract" },
-        lock: expect.objectContaining({
-          enabled: true,
-          lockId: "lock-123",
-        }),
-      }),
-    );
-  });
-
-  it("returns denied when Autumn denies the lock", async () => {
-    mockCheck.mockResolvedValue({
-      allowed: false,
-      customerId: "org-1",
-      balance: null,
-    });
-    const svc = makeService();
-    const result = await svc.lockCredits({
-      teamId: "team-1",
-      value: 10,
-      lockId: "lock-123",
-    });
-    expect(result).toEqual({ status: "denied" });
-  });
-
-  it("returns skipped when the billing API throws (fallback)", async () => {
-    mockCheck.mockRejectedValue(new Error("autumn down"));
-    const svc = makeService();
-    const result = await svc.lockCredits({
-      teamId: "team-1",
-      value: 10,
-      lockId: "lock-123",
-    });
-    expect(result).toEqual({ status: "skipped" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -409,63 +382,43 @@ describe("lockCredits", () => {
 // ---------------------------------------------------------------------------
 
 describe("checkCredits", () => {
-  it("returns null when autumnClient is null", async () => {
-    state.autumnClientRef = null;
-    const svc = makeService();
-    const result = await svc.checkCredits({ teamId: "team-1", value: 10 });
-    expect(result).toBeNull();
-    expect(mockCheck).not.toHaveBeenCalled();
-  });
+  useFirebill({ success: true, allowed: true, remaining: 500 });
 
-  it("returns allowed and remaining on happy path without a lock", async () => {
-    mockCheck.mockResolvedValue({
-      allowed: true,
-      customerId: "org-1",
-      balance: { remaining: 500 },
-    });
+  it("returns null without asking anyone when firebill is not configured", async () => {
+    state.configRef = {};
     const svc = makeService();
     const result = await svc.checkCredits({
       teamId: "team-1",
-      value: 42,
-      properties: { source: "checkCreditsMiddleware" },
+      orgId: "org-1",
+      value: 10,
     });
-
-    expect(result).toEqual({ allowed: true, remaining: 500 });
-    expect(mockCheck).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customerId: "org-1",
-        entityId: "team-1",
-        featureId: "CREDITS",
-        requiredBalance: 42,
-        properties: { source: "checkCreditsMiddleware" },
-      }),
-    );
-    expect(mockCheck).toHaveBeenCalledWith(
-      expect.not.objectContaining({ lock: expect.anything() }),
-    );
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockCheck).not.toHaveBeenCalled();
   });
 
-  it("returns allowed false with remaining 0 when balance is null", async () => {
-    mockCheck.mockResolvedValue({
-      allowed: false,
-      customerId: "org-1",
-      balance: null,
-    });
+  it("returns null for preview teams", async () => {
     const svc = makeService();
-    const result = await svc.checkCredits({ teamId: "team-1", value: 10 });
-    expect(result).toEqual({ allowed: false, remaining: 0 });
+    const result = await svc.checkCredits({
+      teamId: "preview_abc",
+      orgId: "org-1",
+      value: 10,
+    });
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("checks against SEARCH_CREDITS when featureId is provided", async () => {
     const svc = makeService();
     await svc.checkCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 5,
       featureId: "SEARCH_CREDITS",
     });
-    expect(mockCheck).toHaveBeenCalledWith(
-      expect.objectContaining({ featureId: "SEARCH_CREDITS" }),
-    );
+    expect(firebillBodies()[0]).toMatchObject({
+      feature_id: "SEARCH_CREDITS",
+    });
   });
 });
 
@@ -474,11 +427,18 @@ describe("checkCredits", () => {
 // ---------------------------------------------------------------------------
 
 describe("trackCredits", () => {
-  it("returns false when autumnClient is null", async () => {
-    state.autumnClientRef = null;
+  useFirebill({ success: true });
+
+  it("returns false without asking anyone when firebill is not configured", async () => {
+    state.configRef = {};
     const svc = makeService();
-    const result = await svc.trackCredits({ teamId: "team-1", value: 10 });
+    const result = await svc.trackCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 10,
+    });
     expect(result).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
   });
 
@@ -486,37 +446,11 @@ describe("trackCredits", () => {
     const svc = makeService();
     const result = await svc.trackCredits({
       teamId: "preview_abc",
+      orgId: "org-1",
       value: 10,
     });
     expect(result).toBe(false);
-    expect(mockTrack).not.toHaveBeenCalled();
-  });
-
-  it("calls track with correct feature and value on happy path", async () => {
-    const svc = makeService();
-
-    const result = await svc.trackCredits({
-      teamId: "team-1",
-      value: 42,
-      properties: { source: "test", endpoint: "extract" },
-    });
-
-    expect(result).toBe(true);
-    // track should have been called for the actual usage event (at minimum).
-    const trackCalls = mockTrack.mock.calls;
-    const usageCall = trackCalls.find(
-      (c: any[]) => c[0].featureId === "CREDITS" && c[0].value === 42,
-    );
-    expect(usageCall).toBeDefined();
-    expect((usageCall as any[])[0].properties?.endpoint).toBe("extract");
-    expect((usageCall as any[])[0].overageBehavior).toBe("overflow");
-  });
-
-  it("returns false when the Autumn track request fails", async () => {
-    mockTrack.mockRejectedValueOnce(new Error("track failed"));
-    const svc = makeService();
-
-    expect(await svc.trackCredits({ teamId: "team-1", value: 42 })).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("tracks against SEARCH_CREDITS when featureId is provided", async () => {
@@ -524,15 +458,17 @@ describe("trackCredits", () => {
 
     const result = await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 7,
       properties: { source: "test", endpoint: "search" },
       featureId: "SEARCH_CREDITS",
     });
 
     expect(result).toBe(true);
-    const usageCall = mockTrack.mock.calls.find((c: any[]) => c[0].value === 7);
-    expect(usageCall).toBeDefined();
-    expect((usageCall as any[])[0].featureId).toBe("SEARCH_CREDITS");
+    expect(firebillBodies()[0]).toMatchObject({
+      feature_id: "SEARCH_CREDITS",
+      value: 7,
+    });
   });
 });
 
@@ -541,26 +477,22 @@ describe("trackCredits", () => {
 // ---------------------------------------------------------------------------
 
 describe("finalizeCreditsLock", () => {
-  it("calls balances.finalize with confirm", async () => {
-    const svc = makeService();
-    await svc.finalizeCreditsLock({
-      lockId: "lock-123",
-      action: "confirm",
-      properties: { source: "test" },
-    });
+  useFirebill({ success: true });
 
-    expect(mockFinalize).toHaveBeenCalledWith({
-      lockId: "lock-123",
-      action: "confirm",
-      overrideValue: undefined,
-      properties: { source: "test" },
-    });
-  });
-
-  it("is a no-op when autumnClient is null", async () => {
-    state.autumnClientRef = null;
+  // No hold can have been taken without firebill, so there is nothing to
+  // settle — and Autumn is not asked to settle it instead.
+  it("is a no-op that reports settled when firebill is not configured", async () => {
+    state.configRef = {};
     const svc = makeService();
-    await svc.finalizeCreditsLock({ lockId: "lock-123", action: "release" });
+
+    expect(
+      await svc.finalizeCreditsLock({
+        lockId: "lock-123",
+        action: "release",
+        team: { teamId: "team-1", orgId: "org-1" },
+      }),
+    ).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockFinalize).not.toHaveBeenCalled();
   });
 });
@@ -570,51 +502,43 @@ describe("finalizeCreditsLock", () => {
 // ---------------------------------------------------------------------------
 
 describe("refundCredits", () => {
-  it("calls track with the negated value", async () => {
-    const svc = makeService();
-    await svc.refundCredits({
-      teamId: "team-1",
-      value: 30,
-      properties: { endpoint: "extract" },
-    });
-
-    const refundCall = mockTrack.mock.calls.find(
-      (c: any[]) => c[0].value === -30,
-    );
-    expect(refundCall).toBeDefined();
-    expect((refundCall as any[])[0].properties?.source).toBe("autumn_refund");
-    expect((refundCall as any[])[0].properties?.endpoint).toBe("extract");
-    expect((refundCall as any[])[0].featureId).toBe("CREDITS");
-    expect((refundCall as any[])[0].overageBehavior).toBe("overflow");
-  });
+  useFirebill({ success: true });
 
   it("refunds against SEARCH_CREDITS when featureId is provided", async () => {
     const svc = makeService();
     await svc.refundCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 1,
       properties: { endpoint: "search" },
       featureId: "SEARCH_CREDITS",
     });
 
-    const refundCall = mockTrack.mock.calls.find(
-      (c: any[]) => c[0].value === -1,
-    );
-    expect(refundCall).toBeDefined();
-    expect((refundCall as any[])[0].featureId).toBe("SEARCH_CREDITS");
+    expect(firebillPaths()).toEqual(["/v1/refund"]);
+    expect(firebillBodies()[0]).toMatchObject({
+      feature_id: "SEARCH_CREDITS",
+      value: 1,
+    });
   });
 
-  it("is a no-op when autumnClient is null", async () => {
-    state.autumnClientRef = null;
+  it("is a no-op when firebill is not configured", async () => {
+    state.configRef = {};
     const svc = makeService();
-    await svc.refundCredits({ teamId: "team-1", value: 30 });
+    expect(
+      await svc.refundCredits({ teamId: "team-1", orgId: "org-1", value: 30 }),
+    ).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
   });
 
   it("is a no-op for preview teams", async () => {
     const svc = makeService();
-    await svc.refundCredits({ teamId: "preview_abc", value: 30 });
-    expect(mockTrack).not.toHaveBeenCalled();
+    await svc.refundCredits({
+      teamId: "preview_abc",
+      orgId: "org-1",
+      value: 30,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -639,80 +563,224 @@ describe("featureIdForBillingEndpoint", () => {
 });
 
 // ---------------------------------------------------------------------------
-// getEntityLimits fallback behavior (concurrency + rate-limit multiplier)
+// getTeamLimits (concurrency + rate-limit multiplier)
 // ---------------------------------------------------------------------------
 
-describe("entity limits fallback", () => {
+describe("hasAutoTopUp", () => {
+  const customer = (enabled: boolean, billingMethod?: string) => ({
+    billingControls: {
+      autoTopups: [
+        { featureId: "CREDITS", enabled, threshold: 0, quantity: 1000 },
+      ],
+    },
+    balances: {
+      CREDITS: {
+        breakdown: [
+          { planId: "standard", price: null },
+          ...(billingMethod
+            ? [{ planId: "standard", price: { billingMethod } }]
+            : []),
+        ],
+      },
+    },
+  });
+
+  it("is true for an enabled top-up with a prepaid CREDITS item to buy", async () => {
+    mockCustomerGet.mockResolvedValue(customer(true, "prepaid"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+    expect(mockCustomerGet).toHaveBeenCalledWith({ customerId: "org-1" });
+  });
+
+  it("is false when the top-up is disabled", async () => {
+    mockCustomerGet.mockResolvedValue(customer(false, "prepaid"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(false);
+  });
+
+  it("is false for an enabled top-up with nothing prepaid to buy (free plan)", async () => {
+    mockCustomerGet.mockResolvedValue(customer(true));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(false);
+  });
+
+  it("fails open (true) when Autumn errors", async () => {
+    mockCustomerGet.mockRejectedValue(new Error("autumn down"));
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+  });
+
+  it("fails open (true) without an Autumn client", async () => {
+    state.autumnClientRef = null;
+    expect(await makeService().hasAutoTopUp("org-1")).toBe(true);
+  });
+});
+
+describe("getTeamLimits", () => {
+  const lowDefaults = {
+    concurrency_limit: 2,
+    rate_limit_multiplier: 1,
+    is_paid_plan: false,
+  };
+  const subscription = (planId: string, overrides: object = {}) => ({
+    planId,
+    status: "active",
+    addOn: false,
+    ...overrides,
+  });
+
   it("returns the Autumn values on the happy path", async () => {
-    const svc = makeService();
     mockEntityGet.mockResolvedValue({
       balances: {
         CONCURRENCY: { remaining: 7 },
         rate_limits: { granted: 25 },
       },
     });
+    mockCustomerGet.mockResolvedValue({
+      subscriptions: [subscription("hobby")],
+    });
 
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBe(7);
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(25);
+    expect(await makeService().getTeamLimits("team-1", "org-1")).toEqual({
+      concurrency_limit: 7,
+      rate_limit_multiplier: 25,
+      is_paid_plan: true,
+    });
+    expect(mockEntityGet).toHaveBeenCalledWith({
+      customerId: "org-1",
+      entityId: "team-1",
+    });
+    expect(mockCustomerGet).toHaveBeenCalledWith({ customerId: "org-1" });
   });
 
-  it("falls back LOW (null / multiplier 1) when the entity is missing (404)", async () => {
-    const svc = makeService();
-    mockEntityGet.mockRejectedValue({ statusCode: 404 });
+  it("starts the customer read without waiting for the entity read", async () => {
+    let resolveEntity: (entity: unknown) => void = () => {};
+    mockEntityGet.mockReturnValue(
+      new Promise(resolve => {
+        resolveEntity = resolve;
+      }),
+    );
 
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBeNull();
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(1);
+    const pending = makeService().getTeamLimits("team-1", "org-1");
+    expect(mockCustomerGet).toHaveBeenCalledTimes(1);
+    resolveEntity({ balances: {} });
+    expect(await pending).toEqual(lowDefaults);
   });
 
-  it("falls back LOW when the entity exists but the balances are absent", async () => {
-    const svc = makeService();
-    mockEntityGet.mockResolvedValue({ balances: {} });
+  it.each([
+    ["a priced plan", [subscription("standard")], true],
+    ["a legacy plan", [subscription("legacy_standard")], true],
+    ["an enterprise plan", [subscription("enterprise_10m")], true],
+    ["the free plan", [subscription("free")], false],
+    ["the free-boost plan", [subscription("free_1_5k")], false],
+    [
+      "free plus the pay-as-you-go add-on",
+      [subscription("free"), subscription("pay_as_you_go", { addOn: true })],
+      false,
+    ],
+    [
+      "only a paid add-on",
+      [subscription("credit_pack_1k", { addOn: true })],
+      false,
+    ],
+    [
+      "free with a paid plan only scheduled",
+      [subscription("free"), subscription("hobby", { status: "scheduled" })],
+      false,
+    ],
+    ["no subscriptions", [], false],
+  ])("is_paid_plan for %s is %s", async (_case, subscriptions, expected) => {
+    mockCustomerGet.mockResolvedValue({ subscriptions });
 
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBeNull();
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(1);
+    const limits = await makeService().getTeamLimits("team-1", "org-1");
+
+    expect(limits.is_paid_plan).toBe(expected);
   });
 
-  it("fails OPEN with high limits when Autumn errors (not a 404)", async () => {
-    const svc = makeService();
-    mockEntityGet.mockRejectedValue({ statusCode: 500 });
+  it.each([
+    [
+      "the entity is missing (404)",
+      () => mockEntityGet.mockRejectedValue({ statusCode: 404 }),
+    ],
+    [
+      "the balances are absent",
+      () => mockEntityGet.mockResolvedValue({ balances: {} }),
+    ],
+  ])("resolves to the low defaults when %s", async (_case, arrange) => {
+    arrange();
 
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBe(200);
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(2500);
+    expect(await makeService().getTeamLimits("team-1", "org-1")).toEqual(
+      lowDefaults,
+    );
   });
 
-  it("fails OPEN when Autumn throws a non-HTTP error", async () => {
-    const svc = makeService();
-    mockEntityGet.mockRejectedValue(new Error("ECONNREFUSED"));
+  it("keeps the entity's limits but reports no paid plan when the customer is missing (404)", async () => {
+    mockEntityGet.mockResolvedValue({
+      balances: {
+        CONCURRENCY: { remaining: 7 },
+        rate_limits: { granted: 25 },
+      },
+    });
+    mockCustomerGet.mockRejectedValue({ statusCode: 404 });
 
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBe(200);
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(2500);
+    expect(await makeService().getTeamLimits("team-1", "org-1")).toEqual({
+      concurrency_limit: 7,
+      rate_limit_multiplier: 25,
+      is_paid_plan: false,
+    });
   });
 
-  it("does NOT cache the error fail-open value — retries Autumn next call", async () => {
-    const svc = makeService();
-    mockEntityGet.mockRejectedValueOnce({ statusCode: 500 });
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBe(200);
+  it.each([
+    ["the entity read errors (not a 404)", mockEntityGet, { statusCode: 500 }],
+    [
+      "the entity read throws a non-HTTP error",
+      mockEntityGet,
+      new Error("ECONNREFUSED"),
+    ],
+    [
+      "the customer read errors (not a 404)",
+      mockCustomerGet,
+      { statusCode: 500 },
+    ],
+  ])("throws when %s", async (_case, read, error) => {
+    read.mockRejectedValue(error);
 
-    // Autumn recovers on the next call; the earlier error must not be pinned.
+    await expect(
+      makeService().getTeamLimits("team-1", "org-1"),
+    ).rejects.toBeDefined();
+  });
+
+  it("throws without asking Autumn when there is no org", async () => {
+    await expect(makeService().getTeamLimits("team-1", null)).rejects.toThrow();
+    expect(mockEntityGet).not.toHaveBeenCalled();
+    expect(mockCustomerGet).not.toHaveBeenCalled();
+  });
+
+  it("reads Autumn on every call, keeping no cache of its own", async () => {
+    const svc = makeService();
     mockEntityGet.mockResolvedValue({
       balances: { CONCURRENCY: { remaining: 3 }, rate_limits: { granted: 10 } },
     });
-    expect(await svc.getConcurrencyLimit("team-1", "org-1")).toBe(3);
-    expect(await svc.getRateLimitMultiplier("team-1", "org-1")).toBe(10);
+    await svc.getTeamLimits("team-1", "org-1");
+    await svc.getTeamLimits("team-1", "org-1");
+    expect(mockEntityGet).toHaveBeenCalledTimes(2);
+    expect(mockCustomerGet).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers the low defaults for a preview team without asking Autumn", async () => {
+    expect(await makeService().getTeamLimits("preview_x", "org-1")).toEqual(
+      lowDefaults,
+    );
+    expect(mockEntityGet).not.toHaveBeenCalled();
+    expect(mockCustomerGet).not.toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// firebill routing (gradual rollout by org allowlist)
+// firebill requests
 // ---------------------------------------------------------------------------
 
-describe("firebill routing", () => {
+describe("firebill requests", () => {
   const mockFetch = vi.fn<(url: any, init?: any) => Promise<Response>>();
 
   const firebillConfig = () => ({
     FIREBILL_URL: "http://firebill.test",
     FIREBILL_SECRET: "fb-secret",
-    FIREBILL_ORG_IDS: ["org-1", "org-2"],
   });
 
   const firebillResponse = (success: boolean) =>
@@ -740,6 +808,7 @@ describe("firebill routing", () => {
     const svc = makeService();
     await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 3,
       properties: { source: "billTeam", endpoint: "scrape" },
     });
@@ -754,6 +823,7 @@ describe("firebill routing", () => {
 
     await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 5,
       properties: { source: "billScrapeJob", endpoint: "scrape" },
       idempotencyKey: "fc:track:scrape:job-123",
@@ -764,6 +834,7 @@ describe("firebill routing", () => {
 
     await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 5,
       properties: { source: "billTeam", endpoint: "search" },
     });
@@ -786,12 +857,14 @@ describe("firebill routing", () => {
     // track and silently drop the refund.
     await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 5,
       properties: { source: "billScrapeJob", endpoint: "scrape" },
       idempotencyKey: "fc:track:scrape:job-123",
     });
     await svc.refundCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 5,
       properties: { source: "billScrapeJob", endpoint: "scrape" },
       idempotencyKey: "fc:refund:scrape:job-123",
@@ -808,12 +881,13 @@ describe("firebill routing", () => {
     expect(trackKey).not.toBe(refundKey);
   });
 
-  it("routes trackCredits for an allowlisted org to firebill, not Autumn", async () => {
+  it("routes trackCredits to firebill, not Autumn", async () => {
     state.configRef = firebillConfig();
     const svc = makeService();
 
     const result = await svc.trackCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 42,
       properties: { source: "test", endpoint: "extract" },
     });
@@ -838,11 +912,38 @@ describe("firebill routing", () => {
     });
   });
 
+  it.each([
+    ["trackCredits", 4, "track"],
+    ["refundCredits", 4, "refund"],
+  ] as const)(
+    "%s carries durableRetry through to firebill's retry hand-off",
+    async (method, value, name) => {
+      state.configRef = firebillConfig();
+      mockFetch.mockRejectedValue(new Error("timeout"));
+      const svc = makeService();
+      const call = (durableRetry?: boolean) =>
+        svc[method]({
+          teamId: "team-1",
+          orgId: "org-1",
+          value,
+          idempotencyKey: `fc:${name}:test:1`,
+          ...(durableRetry === undefined ? {} : { durableRetry }),
+        });
+
+      await expect(call(false)).resolves.toBe(false);
+      expect(retryQueueAdd).not.toHaveBeenCalled();
+
+      await expect(call()).resolves.toBe(false);
+      expect(retryQueueAdd).toHaveBeenCalledTimes(1);
+      expect(retryQueueAdd.mock.calls[0]![0]).toBe(name);
+    },
+  );
+
   // The gate, not the charge. Before this branch existed checkCredits asked
   // Autumn about the ghost's balance alone — and a gateway ghost is designed to
   // spend credits it does not have, so it 402'd exactly the requests the
   // partner pool exists to fund.
-  it("routes checkCredits for an allowlisted org to /v1/check, not Autumn", async () => {
+  it("routes checkCredits to /v1/check, not Autumn", async () => {
     state.configRef = firebillConfig();
     mockFetch.mockResolvedValue(
       new Response(
@@ -854,6 +955,7 @@ describe("firebill routing", () => {
 
     const result = await svc.checkCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 100,
       properties: { source: "checkCreditsMiddleware" },
     });
@@ -874,17 +976,43 @@ describe("firebill routing", () => {
     });
   });
 
+  // The reset time the out-of-credits 402 names. Every org is routed, so this
+  // is the only path it can come from.
+  it("carries firebill's reset time on a check", async () => {
+    state.configRef = firebillConfig();
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          allowed: false,
+          remaining: 3,
+          resets_at: 1_798_761_600_000,
+        }),
+        { status: 200 },
+      ),
+    );
+    const svc = makeService();
+
+    const result = await svc.checkCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 100,
+      properties: {},
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      remaining: 3,
+      resetsAt: 1_798_761_600_000,
+    });
+  });
+
   // The same property as the charge paths, and it bites harder on the gate: a
   // provisioned org that misses firebill on a charge is billed to the wrong
   // account, but one that misses firebill on the *gate* is refused outright —
-  // Autumn is asked about a balance the org was never meant to pay from. So a
-  // sampling bucket must not decide it.
-  it("routes a gateway-provisioned team's CHECK off the allowlist and at 0 percent", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-      FIREBILL_ROLLOUT_PERCENT: 0,
-    };
+  // Autumn is asked about a balance the org was never meant to pay from.
+  it("routes a gateway-provisioned team's CHECK through firebill, flagged as gateway", async () => {
+    state.configRef = firebillConfig();
     state.gatewayStubRow = { team_id: "team-1" };
     mockFetch.mockResolvedValue(
       new Response(
@@ -896,13 +1024,18 @@ describe("firebill routing", () => {
 
     const result = await svc.checkCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 100,
       properties: {},
     });
 
     // 500 is the funder's pool. Straight to Autumn this would have been the
     // ghost's own balance, and a drained ghost would have been a 402.
-    expect(result).toEqual({ allowed: true, remaining: 500 });
+    expect(result).toEqual({
+      allowed: true,
+      remaining: 500,
+      gatewayProvisioned: true,
+    });
     expect(mockCheck).not.toHaveBeenCalled();
     expect(String(mockFetch.mock.calls[0][0])).toBe(
       "http://firebill.test/v1/check",
@@ -919,22 +1052,14 @@ describe("firebill routing", () => {
     const svc = makeService();
 
     await expect(
-      svc.checkCredits({ teamId: "team-1", value: 100, properties: {} }),
+      svc.checkCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 100,
+        properties: {},
+      }),
     ).resolves.toBeNull();
     expect(mockCheck).not.toHaveBeenCalled();
-  });
-
-  it("checks directly in Autumn for orgs NOT on the allowlist", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    await svc.checkCredits({ teamId: "team-1", value: 1, properties: {} });
-
-    expect(mockCheck).toHaveBeenCalledTimes(1);
-    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("routes refundCredits to /v1/refund with the POSITIVE value", async () => {
@@ -943,6 +1068,7 @@ describe("firebill routing", () => {
 
     await svc.refundCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 30,
       properties: { endpoint: "extract" },
     });
@@ -959,102 +1085,44 @@ describe("firebill routing", () => {
     expect(body.properties.endpoint).toBe("extract");
   });
 
-  it("routes a gateway-provisioned team even when it is off the allowlist and at 0 percent", async () => {
-    // The property the whole branch exists for: a partner's usage cannot depend
-    // on a sampling bucket. Only firebill knows how to split it between the
-    // provisioned org's balance and the partner's pool.
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-      FIREBILL_ROLLOUT_PERCENT: 0,
-    };
+  it("caches a positive gateway lookup without re-querying, since provisioning is one-way", async () => {
+    state.configRef = firebillConfig();
     state.gatewayStubRow = { team_id: "team-1" };
     const svc = makeService();
 
-    const result = await svc.trackCredits({ teamId: "team-1", value: 42 });
-
-    expect(result).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockTrack).not.toHaveBeenCalled();
-  });
-
-  it("caches a positive without re-querying, since provisioning is one-way", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: [],
-      FIREBILL_ROLLOUT_PERCENT: 0,
-    };
-    state.gatewayStubRow = { team_id: "team-1" };
-    // A fresh Response per call: firebill reads the body, and a reused one looks
-    // like a failure and triggers its retry.
-    mockFetch.mockImplementation(async () => firebillResponse(true));
-    const svc = makeService();
-
-    await svc.trackCredits({ teamId: "team-1", value: 1 });
-    // The row vanishing must not un-route the team: provisioning is one-way,
+    expect(await svc.hostedMcpFeatureId("team-1", "CREDITS")).toBe("CREDITS");
+    // The row vanishing must not un-flag the team: provisioning is one-way,
     // and re-reading would put a query on every billing event.
     state.gatewayStubRow = null;
-    await svc.trackCredits({ teamId: "team-1", value: 1 });
-
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockTrack).not.toHaveBeenCalled();
+    expect(await svc.hostedMcpFeatureId("team-1", "CREDITS")).toBe("CREDITS");
   });
 
-  it("does not cache a negative when the lookup fails", async () => {
+  it("does not cache a negative when the gateway lookup fails", async () => {
     // A blip must not become a TTL's worth of partner usage billed to the
-    // provisioned account alone: that event routes direct, the next asks again.
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: [],
-      FIREBILL_ROLLOUT_PERCENT: 0,
-    };
+    // provisioned account alone: that call answers "not gateway", the next
+    // asks again.
+    state.configRef = firebillConfig();
     state.gatewayStubThrows = true;
     state.gatewayStubRow = { team_id: "team-1" };
-    mockFetch.mockImplementation(async () => firebillResponse(true));
     const svc = makeService();
 
-    await svc.trackCredits({ teamId: "team-1", value: 1 });
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(await svc.hostedMcpFeatureId("team-1", "CREDITS")).not.toBe(
+      "CREDITS",
+    );
 
     state.gatewayStubThrows = false;
-    await svc.trackCredits({ teamId: "team-1", value: 1 });
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(await svc.hostedMcpFeatureId("team-1", "CREDITS")).toBe("CREDITS");
   });
 
-  it("uses the direct Autumn path for orgs NOT on the allowlist", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    const result = await svc.trackCredits({ teamId: "team-1", value: 42 });
-
-    expect(result).toBe(true);
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(mockTrack).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the direct Autumn path when FIREBILL_SECRET is missing", async () => {
+  it("skips billing when FIREBILL_SECRET is missing — no Autumn fallback", async () => {
     state.configRef = { ...firebillConfig(), FIREBILL_SECRET: undefined };
     const svc = makeService();
 
-    await svc.trackCredits({ teamId: "team-1", value: 42 });
+    expect(
+      await svc.trackCredits({ teamId: "team-1", orgId: "org-1", value: 42 }),
+    ).toBe(false);
 
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(mockTrack).toHaveBeenCalledTimes(1);
-  });
-
-  it("trims whitespace and ignores empty entries in FIREBILL_ORG_IDS", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["  org-1  ", "", "  "],
-    };
-    const svc = makeService();
-
-    await svc.trackCredits({ teamId: "team-1", value: 1 });
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockTrack).not.toHaveBeenCalled();
   });
 
@@ -1063,7 +1131,11 @@ describe("firebill routing", () => {
     mockFetch.mockResolvedValue(firebillResponse(false));
     const svc = makeService();
 
-    const result = await svc.trackCredits({ teamId: "team-1", value: 42 });
+    const result = await svc.trackCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 42,
+    });
 
     expect(result).toBe(false);
     // CRITICAL: firebill may have durably recorded the event; falling back to
@@ -1076,7 +1148,11 @@ describe("firebill routing", () => {
     mockFetch.mockRejectedValue(new Error("ECONNREFUSED"));
     const svc = makeService();
 
-    const result = await svc.trackCredits({ teamId: "team-1", value: 42 });
+    const result = await svc.trackCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 42,
+    });
 
     expect(result).toBe(false);
     expect(mockTrack).not.toHaveBeenCalled();
@@ -1087,7 +1163,11 @@ describe("firebill routing", () => {
     mockFetch.mockResolvedValue(new Response("unauthorized", { status: 401 }));
     const svc = makeService();
 
-    const result = await svc.trackCredits({ teamId: "team-1", value: 42 });
+    const result = await svc.trackCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 42,
+    });
 
     expect(result).toBe(false);
     expect(mockTrack).not.toHaveBeenCalled();
@@ -1100,7 +1180,7 @@ describe("firebill routing", () => {
   const lockResponse = (body: Record<string, unknown>) =>
     new Response(JSON.stringify(body), { status: 200 });
 
-  it("routes lockCredits for an allowlisted org to /v1/lock, not Autumn", async () => {
+  it("routes lockCredits to /v1/lock, not Autumn", async () => {
     state.configRef = firebillConfig();
     mockFetch.mockResolvedValue(
       lockResponse({
@@ -1114,6 +1194,7 @@ describe("firebill routing", () => {
     const expiresAt = Date.now() + 60 * 60 * 1000;
     const result = await svc.lockCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 10,
       lockId: "monitor_check-1",
       expiresAt,
@@ -1147,7 +1228,12 @@ describe("firebill routing", () => {
     const svc = makeService();
 
     const before = Date.now();
-    await svc.lockCredits({ teamId: "team-1", value: 1, lockId: "lock-1" });
+    await svc.lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 1,
+      lockId: "lock-1",
+    });
 
     const lockCall = mockFetch.mock.calls.find(([url]) =>
       String(url).endsWith("/v1/lock"),
@@ -1165,6 +1251,7 @@ describe("firebill routing", () => {
 
     const result = await svc.lockCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 10,
       lockId: "lock-1",
     });
@@ -1182,11 +1269,12 @@ describe("firebill routing", () => {
 
     const result = await svc.lockCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 10,
       lockId: "lock-1",
     });
 
-    expect(result).toEqual({ status: "skipped" });
+    expect(result).toEqual({ status: "skipped", reason: "unavailable" });
     expect(mockCheck).not.toHaveBeenCalled();
   });
 
@@ -1196,13 +1284,23 @@ describe("firebill routing", () => {
 
     mockFetch.mockResolvedValueOnce(lockResponse({ success: false }));
     expect(
-      await svc.lockCredits({ teamId: "team-1", value: 10, lockId: "lock-1" }),
-    ).toEqual({ status: "skipped" });
+      await svc.lockCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 10,
+        lockId: "lock-1",
+      }),
+    ).toEqual({ status: "skipped", reason: "unavailable" });
 
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
     expect(
-      await svc.lockCredits({ teamId: "team-1", value: 10, lockId: "lock-1" }),
-    ).toEqual({ status: "skipped" });
+      await svc.lockCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 10,
+        lockId: "lock-1",
+      }),
+    ).toEqual({ status: "skipped", reason: "unavailable" });
 
     // A firebill-side hold may exist under this lock id; a direct-Autumn
     // retry of the same lock must never be attempted.
@@ -1227,6 +1325,7 @@ describe("firebill routing", () => {
 
     const result = await svc.lockCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 10,
       lockId: "monitor_check-1",
       partnerJobToken: "job-token-abc",
@@ -1256,6 +1355,7 @@ describe("firebill routing", () => {
     for (const partnerJobToken of [undefined, null]) {
       await svc.lockCredits({
         teamId: "team-1",
+        orgId: "org-1",
         value: 10,
         lockId: "lock-1",
         partnerJobToken,
@@ -1292,13 +1392,19 @@ describe("firebill routing", () => {
         return realTimeout(ms);
       });
 
-    await svc.lockCredits({ teamId: "team-1", value: 1, lockId: "lock-1" });
+    await svc.lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 1,
+      lockId: "lock-1",
+    });
     const plain = mockFetch.mock.calls
       .filter(([url]) => String(url).endsWith("/v1/lock"))
       .pop();
 
     await svc.lockCredits({
       teamId: "team-1",
+      orgId: "org-1",
       value: 1,
       lockId: "lock-1",
       partnerJobToken: "job-token-abc",
@@ -1329,6 +1435,7 @@ describe("firebill routing", () => {
       expect(
         await svc.lockCredits({
           teamId: "team-1",
+          orgId: "org-1",
           value: 10,
           lockId: "lock-1",
           partnerJobToken: "job-token-abc",
@@ -1344,30 +1451,12 @@ describe("firebill routing", () => {
     expect(
       await svc.lockCredits({
         teamId: "team-1",
+        orgId: "org-1",
         value: 10,
         lockId: "lock-1",
         partnerJobToken: "job-token-abc",
       }),
     ).toEqual({ status: "denied" });
-  });
-
-  // Unreachable (#4403), but a token here would silently skip the gate.
-  it("refuses a hold when a job token reaches the direct-Autumn path", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    expect(
-      await svc.lockCredits({
-        teamId: "team-1",
-        value: 10,
-        lockId: "lock-1",
-        partnerJobToken: "job-token-abc",
-      }),
-    ).toEqual({ status: "denied", reason: "gate_unavailable" });
-    expect(mockCheck).not.toHaveBeenCalled();
   });
 
   // firebill cannot fail closed on its own behalf when it is what is down.
@@ -1376,6 +1465,7 @@ describe("firebill routing", () => {
     const svc = makeService();
     const gated = {
       teamId: "team-1",
+      orgId: "org-1",
       value: 10,
       lockId: "lock-1",
       partnerJobToken: "job-token-abc",
@@ -1411,35 +1501,13 @@ describe("firebill routing", () => {
 
     mockFetch.mockResolvedValueOnce(lockResponse({ success: false }));
     expect(
-      await svc.lockCredits({ teamId: "team-1", value: 10, lockId: "lock-1" }),
-    ).toEqual({ status: "skipped" });
-  });
-
-  // Routing can flip in the hour between a lock and its finalize; going direct
-  // would drop the partner's only report of the run.
-  it("follows the run token to firebill even when routing says otherwise", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    await svc.finalizeCreditsLock({
-      lockId: "monitor_check-1",
-      action: "confirm",
-      overrideValue: 7,
-      teamId: "team-1",
-      externalRequestId: "run-42",
-    });
-
-    expect(mockFinalize).not.toHaveBeenCalled();
-    const finalizeCall = mockFetch.mock.calls.find(([url]) =>
-      String(url).endsWith("/v1/finalize"),
-    );
-    expect(finalizeCall).toBeDefined();
-    expect(JSON.parse(finalizeCall![1].body).external_request_id).toBe(
-      "run-42",
-    );
+      await svc.lockCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 10,
+        lockId: "lock-1",
+      }),
+    ).toEqual({ status: "skipped", reason: "unavailable" });
   });
 
   it("hands the run token back on the finalize as the operation id", async () => {
@@ -1450,7 +1518,7 @@ describe("firebill routing", () => {
       lockId: "monitor_check-1",
       action: "confirm",
       overrideValue: 7,
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
       externalRequestId: "run-42",
     });
 
@@ -1472,7 +1540,7 @@ describe("firebill routing", () => {
       lockId: "monitor_check-1",
       action: "confirm",
       overrideValue: 7,
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
       externalRequestId: "run-42",
       heldValue: 12,
     });
@@ -1494,10 +1562,8 @@ describe("firebill routing", () => {
   // billing_status "failed", and nothing reads that back. Throwing would
   // abandon the finalize, so the hold expires and the run goes unbilled as
   // well as unreported — a worse loss than the missing label.
-  it("still finalizes when it cannot name the org, rather than abandoning the settle", async () => {
+  it("still finalizes when the caller cannot name the org, rather than abandoning the settle", async () => {
     state.configRef = firebillConfig();
-    // No org row for this team, so resolving the customer throws.
-    state.supabaseStubData = { data: null, error: null };
     const svc = makeService();
 
     await expect(
@@ -1505,7 +1571,7 @@ describe("firebill routing", () => {
         lockId: "monitor_check-1",
         action: "confirm",
         overrideValue: 7,
-        teamId: "team-99",
+        // No org for this team, so the caller passes no team at all.
         externalRequestId: "run-42",
       }),
     ).resolves.not.toThrow();
@@ -1539,7 +1605,7 @@ describe("firebill routing", () => {
         lockId: "monitor_check-1",
         action: "confirm",
         overrideValue: 7,
-        teamId: "team-1",
+        team: { teamId: "team-1", orgId: "org-1" },
       }),
     ).resolves.toBe(true);
 
@@ -1552,7 +1618,7 @@ describe("firebill routing", () => {
         lockId: "monitor_check-2",
         action: "confirm",
         overrideValue: 7,
-        teamId: "team-1",
+        team: { teamId: "team-1", orgId: "org-1" },
       }),
     ).resolves.toBe(false);
 
@@ -1563,7 +1629,7 @@ describe("firebill routing", () => {
         lockId: "monitor_check-3",
         action: "confirm",
         overrideValue: 7,
-        teamId: "team-1",
+        team: { teamId: "team-1", orgId: "org-1" },
       }),
     ).resolves.toBe(false);
   });
@@ -1576,7 +1642,7 @@ describe("firebill routing", () => {
       lockId: "monitor_check-1",
       action: "confirm",
       overrideValue: 7,
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
     });
 
     const body = JSON.parse(
@@ -1595,7 +1661,7 @@ describe("firebill routing", () => {
     await svc.finalizeCreditsLock({
       lockId: "monitor_check-1",
       action: "confirm",
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
       externalRequestId: null,
     });
 
@@ -1607,25 +1673,7 @@ describe("firebill routing", () => {
     );
   });
 
-  it("uses the direct Autumn lock path for orgs NOT on the allowlist", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    const result = await svc.lockCredits({
-      teamId: "team-1",
-      value: 10,
-      lockId: "lock-1",
-    });
-
-    expect(result).toEqual({ status: "locked", lockId: "lock-1" });
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(mockCheck).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes finalizeCreditsLock through /v1/finalize when teamId is on the rollout", async () => {
+  it("routes finalizeCreditsLock through /v1/finalize for a team", async () => {
     state.configRef = firebillConfig();
     const svc = makeService();
 
@@ -1634,7 +1682,7 @@ describe("firebill routing", () => {
       action: "confirm",
       overrideValue: 7,
       properties: { source: "monitorCheck", endpoint: "monitor" },
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
     });
 
     expect(mockFinalize).not.toHaveBeenCalled();
@@ -1659,7 +1707,7 @@ describe("firebill routing", () => {
     await svc.finalizeCreditsLock({
       lockId: "monitor_check-1",
       action: "release",
-      teamId: "team-1",
+      team: { teamId: "team-1", orgId: "org-1" },
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
@@ -1667,30 +1715,302 @@ describe("firebill routing", () => {
     expect(body.idempotency_key).toBe("fc:finalize:release:monitor_check-1");
   });
 
-  it("finalizes directly in Autumn when no teamId is supplied", async () => {
+  // The monitor scheduler and runner and Alexandria pass no team when the org
+  // cannot be named. Those settles used to be the last direct Autumn writes.
+  it("routes an orgless finalize through /v1/finalize, keyed like any other", async () => {
     state.configRef = firebillConfig();
     const svc = makeService();
-
-    await svc.finalizeCreditsLock({ lockId: "lock-1", action: "release" });
-
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(mockFinalize).toHaveBeenCalledTimes(1);
-  });
-
-  it("finalizes directly in Autumn when the team's org is NOT on the allowlist", async () => {
-    state.configRef = {
-      ...firebillConfig(),
-      FIREBILL_ORG_IDS: ["some-other-org"],
-    };
-    const svc = makeService();
-
-    await svc.finalizeCreditsLock({
-      lockId: "lock-1",
+    const settled = await svc.finalizeCreditsLock({
+      lockId: "monitor_check-1",
       action: "confirm",
-      teamId: "team-1",
+      overrideValue: 7,
+      properties: { source: "monitorCheck", endpoint: "monitor" },
     });
 
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(mockFinalize).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
+    expect(mockFinalize).not.toHaveBeenCalled();
+    const finalizeCalls = mockFetch.mock.calls.filter(([url]) =>
+      String(url).endsWith("/v1/finalize"),
+    );
+    expect(finalizeCalls).toHaveLength(1);
+    expect(JSON.parse(finalizeCalls[0]![1].body)).toEqual({
+      lock_id: "monitor_check-1",
+      action: "confirm",
+      override_value: 7,
+      properties: { source: "monitorCheck", endpoint: "monitor" },
+      idempotency_key: "fc:finalize:confirm:monitor_check-1",
+    });
+  });
+
+  // One attempt, and `false` back to the caller when it did not land. No
+  // retry is added here.
+  it("answers false for an orgless finalize firebill did not take, after one attempt", async () => {
+    state.configRef = firebillConfig();
+    mockFetch.mockResolvedValue(new Response("nope", { status: 503 }));
+    const svc = makeService();
+
+    const settled = await svc.finalizeCreditsLock({
+      lockId: "lock-1",
+      action: "confirm",
+      overrideValue: 3,
+    });
+
+    expect(settled).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFinalize).not.toHaveBeenCalled();
+    expect(retryQueueAdd).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where the org comes from: the caller, and nowhere else.
+// ---------------------------------------------------------------------------
+
+describe("the org the caller supplies", () => {
+  const CALLER_ORG = "3f2c1b8e-7a4d-4c1e-9b6a-0d5e8f2a1c74";
+
+  // That the service has no way to look an org up at all is guarded by
+  // autumn.service.org-source.test.ts, which mocks controllers/auth to throw.
+
+  it("sends the caller's org to firebill as the customer", async () => {
+    const mockFetch = vi.fn<(url: any, init?: any) => Promise<Response>>();
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({ success: true, allowed: true, remaining: 500 }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    state.configRef = {
+      FIREBILL_URL: "http://firebill.test",
+      FIREBILL_SECRET: "fb-secret",
+    };
+
+    try {
+      const svc = makeService();
+
+      const result = await svc.checkCredits({
+        teamId: "team-1",
+        orgId: CALLER_ORG,
+        value: 100,
+        properties: { source: "checkCreditsMiddleware" },
+      });
+
+      expect(result).toEqual({ allowed: true, remaining: 500 });
+      expect(mockCheck).not.toHaveBeenCalled();
+      const [url, init] = mockFetch.mock.calls[0]!;
+      expect(String(url)).toBe("http://firebill.test/v1/check");
+      expect(JSON.parse(init.body).customer_id).toBe(CALLER_ORG);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Who provisions (§2 of the middleware credit-check spec). The monolith no
+// longer runs its own customer/entity prefix: firebill creates a missing
+// entity itself, off the 404 Autumn answers the billing call with.
+// ---------------------------------------------------------------------------
+
+describe("provisioning", () => {
+  const mockFetch = vi.fn<(url: any, init?: any) => Promise<Response>>();
+
+  const firebillConfig = () => ({
+    FIREBILL_URL: "http://firebill.test",
+    FIREBILL_SECRET: "fb-secret",
+  });
+
+  // A fresh Response per call: firebill reads the body, and a reused one looks
+  // like a failure and triggers its retry.
+  const answers = (body: Record<string, unknown>) => () =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+  const expectNoProvisioning = () => {
+    expect(mockGetOrCreate).not.toHaveBeenCalled();
+    expect(mockEntityGet).not.toHaveBeenCalled();
+    expect(mockEntityCreate).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockImplementation(
+      answers({
+        success: true,
+        allowed: true,
+        remaining: 500,
+        lock_id: "lock-1",
+      }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    state.gatewayStubRow = null;
+    state.gatewayStubThrows = false;
+    state.configRef = firebillConfig();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("check asks firebill the same question, and provisions nothing", async () => {
+    const svc = makeService();
+
+    const result = await svc.checkCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 100,
+      properties: { source: "checkCreditsMiddleware" },
+    });
+
+    expect(result).toEqual({ allowed: true, remaining: 500 });
+    expectNoProvisioning();
+    expect(mockCheck).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toBe("http://firebill.test/v1/check");
+    expect(JSON.parse(init.body)).toEqual({
+      customer_id: "org-1",
+      entity_id: "team-1",
+      feature_id: "CREDITS",
+      value: 100,
+      properties: { source: "checkCreditsMiddleware" },
+    });
+  });
+
+  it("lock holds through firebill unchanged, and provisions nothing", async () => {
+    const svc = makeService();
+
+    const result = await svc.lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 10,
+      lockId: "lock-1",
+      expiresAt: 1_700_000_000_000,
+      properties: { source: "monitorCheck" },
+    });
+
+    expect(result).toEqual({ status: "locked", lockId: "lock-1" });
+    expectNoProvisioning();
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toBe("http://firebill.test/v1/lock");
+    expect(JSON.parse(init.body)).toEqual({
+      customer_id: "org-1",
+      entity_id: "team-1",
+      feature_id: "CREDITS",
+      value: 10,
+      lock_id: "lock-1",
+      expires_at: 1_700_000_000_000,
+      properties: { source: "monitorCheck" },
+    });
+  });
+
+  it("a gated lock still arms the partner gate, and provisions nothing", async () => {
+    mockFetch.mockImplementation(
+      answers({
+        success: true,
+        allowed: true,
+        lock_id: "lock-1",
+        operation_token: "run-42",
+      }),
+    );
+    const svc = makeService();
+
+    const result = await svc.lockCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 10,
+      lockId: "lock-1",
+      expiresAt: 1_700_000_000_000,
+      partnerJobToken: "pjt-1",
+    });
+
+    expect(result).toEqual({
+      status: "locked",
+      lockId: "lock-1",
+      operationToken: "run-42",
+    });
+    expectNoProvisioning();
+    expect(JSON.parse(mockFetch.mock.calls[0]![1].body).partner_job_token).toBe(
+      "pjt-1",
+    );
+  });
+
+  it("track forwards the same event, and provisions nothing", async () => {
+    const svc = makeService();
+
+    await expect(
+      svc.trackCredits({
+        teamId: "team-1",
+        orgId: "org-1",
+        value: 42,
+        properties: { source: "billScrapeJob", endpoint: "scrape" },
+        idempotencyKey: "fc:track:scrape:job-1",
+      }),
+    ).resolves.toBe(true);
+
+    expectNoProvisioning();
+    expect(mockTrack).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toBe("http://firebill.test/v1/track");
+    expect(JSON.parse(init.body)).toEqual({
+      customer_id: "org-1",
+      entity_id: "team-1",
+      feature_id: "CREDITS",
+      value: 42,
+      properties: { source: "billScrapeJob", endpoint: "scrape" },
+      idempotency_key: "fc:track:scrape:job-1",
+    });
+  });
+
+  it("refund forwards the same event, and provisions nothing", async () => {
+    const svc = makeService();
+
+    await svc.refundCredits({
+      teamId: "team-1",
+      orgId: "org-1",
+      value: 30,
+      properties: { endpoint: "extract" },
+      idempotencyKey: "fc:refund:extract:job-1",
+    });
+
+    expectNoProvisioning();
+    expect(mockTrack).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toBe("http://firebill.test/v1/refund");
+    expect(JSON.parse(init.body)).toEqual({
+      customer_id: "org-1",
+      entity_id: "team-1",
+      feature_id: "CREDITS",
+      // firebill negates a refund itself, so the positive value goes on the wire.
+      value: 30,
+      properties: { endpoint: "extract", source: "autumn_refund" },
+      idempotency_key: "fc:refund:extract:job-1",
+    });
+  });
+
+  // The gated settle needs the org named — that is the whole reason it resolves
+  // one — so this is the case where skipping the prefix must not cost the label.
+  it("a gated finalize still names the org, and provisions nothing", async () => {
+    const svc = makeService();
+
+    await expect(
+      svc.finalizeCreditsLock({
+        lockId: "monitor_check-1",
+        action: "confirm",
+        overrideValue: 7,
+        team: { teamId: "team-1", orgId: "org-1" },
+        externalRequestId: "run-42",
+        heldValue: 12,
+      }),
+    ).resolves.toBe(true);
+
+    expectNoProvisioning();
+    expect(mockFinalize).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toBe("http://firebill.test/v1/finalize");
+    const body = JSON.parse(init.body);
+    expect(body.customer_id).toBe("org-1");
+    expect(body.external_request_id).toBe("run-42");
+    expect(body.feature_id).toBe("CREDITS");
+    expect(body.held_value).toBe(12);
   });
 });

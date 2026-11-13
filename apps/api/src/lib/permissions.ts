@@ -1,4 +1,10 @@
 import { TeamFlags } from "../controllers/v2/types";
+import type { ErrorCodes } from "./error";
+import {
+  type ResolvedSafeMode,
+  SAFE_MODE_CREDENTIAL_HEADERS,
+  SAFE_MODE_LOGIN_ACTIONS,
+} from "./safe-mode";
 import {
   getScrapeZDR,
   getIgnoreRobots,
@@ -10,6 +16,7 @@ import {
   THREAT_PROTECTION_NOT_ENABLED_MESSAGE,
   THREAT_PROTECTION_OVERRIDES_DISABLED_MESSAGE,
 } from "./threat-protection/request";
+import { usOnlyLocationRefusal } from "./us-only";
 
 type LocationOptions = { country?: string };
 type ThreatProtectionOption = { mode?: string };
@@ -17,8 +24,10 @@ type ThreatProtectionOption = { mode?: string };
 interface APIRequest {
   zeroDataRetention?: boolean;
   location?: LocationOptions;
+  geolocation?: LocationOptions;
   scrapeOptions?: {
     location?: LocationOptions;
+    geolocation?: LocationOptions;
     threatProtection?: ThreatProtectionOption;
   };
   crawlerOptions?: {
@@ -28,6 +37,10 @@ interface APIRequest {
   // Per-request threat protection policy override (field-level override of
   // the org config). Presence of any value gates on the team flag.
   threatProtection?: ThreatProtectionOption;
+  proxy?: string;
+  profile?: unknown;
+  actions?: { type: string }[];
+  headers?: Record<string, string>;
 }
 
 interface PermissionOptions {
@@ -37,15 +50,30 @@ interface PermissionOptions {
    * threatProtection option is rejected.
    */
   threatProtectionOrgConfig?: { allowRequestOverrides: boolean } | null;
+  safeMode?: ResolvedSafeMode | null;
 }
 
 const SUPPORT_EMAIL = "support@firecrawl.com";
+
+/** The refusal for static-IP egress ("us-whitelist") without the entitlement. */
+export function ipWhitelistRefusal(
+  flags: TeamFlags | null | undefined,
+  ...countries: unknown[]
+): string | undefined {
+  const needsWhitelist = countries.some(
+    value =>
+      typeof value === "string" && value.toLowerCase() === "us-whitelist",
+  );
+  return needsWhitelist && !flags?.ipWhitelist
+    ? `Static IP addresses are not enabled for your team. Contact ${SUPPORT_EMAIL} to get a dedicated set of IP addresses you can whitelist.`
+    : undefined;
+}
 
 export function checkPermissions(
   request: APIRequest,
   flags?: TeamFlags,
   options?: PermissionOptions,
-): { error?: string } {
+): { error?: string; code?: ErrorCodes } {
   // zdr perms — scrapeZDR must be 'allowed' or 'forced' for request-scoped ZDR
   const scrapeMode = getScrapeZDR(flags);
   if (
@@ -63,7 +91,14 @@ export function checkPermissions(
   if (
     request.crawlerOptions?.ignoreRobotsTxt &&
     robotsMode !== "allowed" &&
-    robotsMode !== "forced"
+    robotsMode !== "forced" &&
+    // Under Safe Mode (outside lockdown) the robots rejection below returns
+    // SAFE_MODE_BLOCKED; don't preempt it with the generic entitlement error.
+    !(
+      options?.safeMode &&
+      !options.safeMode.lockdown &&
+      options.safeMode.enforceRobots
+    )
   ) {
     return {
       error: `The ignoreRobotsTxt parameter is an enterprise feature. Contact ${SUPPORT_EMAIL} to explore whether it can be enabled for your team.`,
@@ -87,27 +122,90 @@ export function checkPermissions(
   const threatProtectionOption =
     request.threatProtection ?? request.scrapeOptions?.threatProtection;
   if (threatProtectionOption !== undefined) {
-    const threatMode = getThreatProtection(flags);
-    if (threatMode !== "allowed" && threatMode !== "forced") {
+    const effectiveThreatMode =
+      options?.safeMode?.domainControls === true
+        ? "forced"
+        : getThreatProtection(flags);
+    if (effectiveThreatMode !== "allowed" && effectiveThreatMode !== "forced") {
       return { error: THREAT_PROTECTION_NOT_ENABLED_MESSAGE };
     }
     if (options?.threatProtectionOrgConfig?.allowRequestOverrides === false) {
       return { error: THREAT_PROTECTION_OVERRIDES_DISABLED_MESSAGE };
     }
-    if (threatMode === "forced" && threatProtectionOption.mode === "off") {
+    if (
+      effectiveThreatMode === "forced" &&
+      threatProtectionOption.mode === "off"
+    ) {
       return { error: THREAT_PROTECTION_CANNOT_DISABLE_MESSAGE };
     }
   }
 
-  // ip whitelist perms
-  const needsWhitelist =
-    request.location?.country === "us-whitelist" ||
-    request.scrapeOptions?.location?.country === "us-whitelist";
+  const safeMode = options?.safeMode;
+  if (safeMode && !safeMode.lockdown) {
+    if (
+      safeMode.disableStealthProxy &&
+      (request.proxy === "stealth" || request.proxy === "enhanced")
+    ) {
+      return {
+        error:
+          'Safe Mode: stealth and enhanced proxies are not allowed for your organization. Remove the proxy option or use proxy: "basic".',
+        code: "SAFE_MODE_BLOCKED",
+      };
+    }
+    if (safeMode.enforceRobots && request.crawlerOptions?.ignoreRobotsTxt) {
+      return {
+        error:
+          "Safe Mode: robots.txt is always honored for your organization; the ignoreRobotsTxt parameter is not allowed.",
+        code: "SAFE_MODE_BLOCKED",
+      };
+    }
+    if (safeMode.disableAuthentication) {
+      if (request.profile !== undefined) {
+        return {
+          error:
+            "Safe Mode: browser profiles are not allowed for your organization (nothing behind a login).",
+          code: "SAFE_MODE_BLOCKED",
+        };
+      }
+      const loginAction = (request.actions ?? []).find(a =>
+        SAFE_MODE_LOGIN_ACTIONS.includes(a.type),
+      );
+      if (loginAction) {
+        return {
+          error: `Safe Mode: the ${loginAction.type} action is not allowed for your organization (nothing behind a login).`,
+          code: "SAFE_MODE_BLOCKED",
+        };
+      }
+      const credentialHeader = Object.keys(request.headers ?? {}).find(h =>
+        SAFE_MODE_CREDENTIAL_HEADERS.includes(h.toLowerCase()),
+      );
+      if (credentialHeader) {
+        return {
+          error: `Safe Mode: the ${credentialHeader} header is not allowed for your organization (nothing behind a login).`,
+          code: "SAFE_MODE_BLOCKED",
+        };
+      }
+    }
+  }
 
-  if (needsWhitelist && !flags?.ipWhitelist) {
-    return {
-      error: `Static IP addresses are not enabled for your team. Contact ${SUPPORT_EMAIL} to get a dedicated set of IP addresses you can whitelist.`,
-    };
+  const usOnlyLocationError = usOnlyLocationRefusal(
+    flags,
+    request.location?.country,
+    request.geolocation?.country,
+    request.scrapeOptions?.location?.country,
+    request.scrapeOptions?.geolocation?.country,
+  );
+  if (usOnlyLocationError) {
+    return { error: usOnlyLocationError, code: "US_ONLY_UNAVAILABLE" };
+  }
+
+  const ipWhitelistError = ipWhitelistRefusal(
+    flags,
+    request.location?.country,
+    request.scrapeOptions?.location?.country,
+  );
+  if (ipWhitelistError) {
+    return { error: ipWhitelistError };
   }
 
   return {};

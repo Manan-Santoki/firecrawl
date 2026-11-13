@@ -1,11 +1,19 @@
 import { randomUUID } from "crypto";
+import type { Job } from "bullmq";
+import { z } from "zod";
 import { config } from "../../config";
 import { logger } from "../../lib/logger";
-import { sampled } from "../../lib/rollout";
+import {
+  getFirebillTrackRetryQueue,
+  type FirebillTrackRetryJobData,
+} from "../queue-service";
 import type { LockDeniedReason, TrackParams } from "./types";
 import {
   firebillCheckTotal,
+  firebillFailureCauseTotal,
   firebillRetryTotal,
+  firebillTrackRetryExhaustedValueTotal,
+  firebillTrackRetryTotal,
   firebillTrackTotal,
 } from "./metrics";
 
@@ -36,7 +44,7 @@ function lockDeniedReason(value: unknown): LockDeniedReason | undefined {
 
 // firebill's own internal budget (durable write + forward attempt) is up to
 // ~3.5s worst case, so this is deliberately looser than the 2s timeout on the
-// direct Autumn client.
+// Autumn client.
 const FIREBILL_TIMEOUT_MS = 5000;
 
 // A gated lock legitimately does more: firebill asks the partner (2.5s ceiling)
@@ -52,67 +60,227 @@ const FIREBILL_GATED_LOCK_TIMEOUT_MS = 10000;
 const FIREBILL_ATTEMPTS = 2;
 const FIREBILL_RETRY_DELAY_MS = 150;
 
-// FIREBILL_ORG_IDS is decoded once at startup by the config schema; the Set is
-// built lazily on first use and cached, keyed on the decoded array reference.
-let allowlistCache: { source: string[] | undefined; ids: Set<string> } | null =
-  null;
+// The durable retry behind an unanswered track: first re-send after 30s, then
+// 60s, 120s and doubling, so the eighth and last lands about two hours after
+// the caller gave up. Long enough to outlast a firebill pod being rescheduled
+// off a lost node.
+export const FIREBILL_DURABLE_RETRY_ATTEMPTS = 8;
+const FIREBILL_DURABLE_RETRY_FIRST_DELAY_MS = 30_000;
+// BullMQ's exponential backoff waits base * 2^(n-1) after the nth failure, so
+// a 60s base is what makes the second gap double the first.
+const FIREBILL_DURABLE_RETRY_BACKOFF_MS = 60_000;
+// The queue's Redis client retries a command forever while disconnected, so an
+// enqueue is bounded here: a Redis outage must not hang the billing call.
+const FIREBILL_DURABLE_RETRY_ENQUEUE_TIMEOUT_MS = 2000;
 
-function firebillOrgIds(): Set<string> {
-  const source = config.FIREBILL_ORG_IDS;
-  if (!allowlistCache || allowlistCache.source !== source) {
-    allowlistCache = {
-      source,
-      ids: new Set(
-        (source ?? []).map(id => id.trim()).filter(id => id.length > 0),
-      ),
-    };
+/**
+ * Why a firebill call did not produce a usable answer, at a cardinality safe to
+ * put on a counter. **`timeout` and `connection` are ours, not firebill's**:
+ * the request never completed, so firebill never answered and may never have
+ * been reached.
+ *
+ * - `non_ok` — firebill answered, with a status we cannot use.
+ * - `unusable` — firebill answered, and the answer is not one we can read: an
+ *   empty or malformed body, or a shape missing the field we asked for. **Not a
+ *   refusal**: an event may well have been accepted and said so in a body we
+ *   could not parse.
+ * - `refused` — firebill answered `success: false`. On `/v1/track` that means
+ *   it did not take the event; on `/v1/check` it means it declined to answer.
+ * - `ambiguous` — firebill answered "I do not know" (a 504, or `ambiguous:
+ *   true`): the broker may hold the event already.
+ */
+type FirebillCause =
+  | "timeout"
+  | "connection"
+  | "non_ok"
+  | "unusable"
+  | "refused"
+  | "ambiguous";
+
+/**
+ * The fields a billing success line carries so a monitor can join it, by
+ * idempotency key, to firebill's own settlement line and to the reconciler's
+ * amount verdicts. `expectedValue` is the amount the operation should bill: a
+ * track's value, a refund's made positive, a confirm's override else its hold,
+ * and 0 for a release, which bills nothing whatever it held.
+ */
+function billingSuccessFields(
+  operation: "track" | "refund" | "finalize",
+  idempotencyKey: string | undefined,
+  expectedValue: number | undefined,
+  properties: Record<string, unknown> | undefined,
+) {
+  const jobId = properties?.jobId;
+  return {
+    operation,
+    outcome: "accepted",
+    idempotencyKey,
+    expectedValue,
+    ...(typeof jobId === "string" ? { jobId } : {}),
+    buildVersion: config.FIRECRAWL_BUILD_SHA ?? "unknown",
+  };
+}
+
+/** What a thrown fetch tells us, once it is unwrapped. */
+type TransportFailure = {
+  cause: "timeout" | "connection";
+  errorName?: string;
+  errorCode?: string;
+};
+
+const TIMEOUT_NAMES = new Set(["AbortError", "TimeoutError"]);
+const TIMEOUT_CODES = new Set([
+  "ABORT_ERR",
+  "UND_ERR_ABORTED",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+/**
+ * Classify a thrown fetch: a deadline we imposed, or a socket/DNS failure.
+ *
+ * Walks `cause`, because undici reports the real error nested inside a bare
+ * `TypeError: fetch failed` — reading only the top level would call every
+ * ECONNREFUSED a generic exception.
+ *
+ * Anything that is not recognisably one of our deadlines is `connection`:
+ * ECONNREFUSED, ECONNRESET, EPIPE, ENOTFOUND, EAI_AGAIN and their kin all mean
+ * the request never got an answer, which is the distinction that matters.
+ */
+function classifyTransportError(error: unknown): TransportFailure {
+  let name: string | undefined;
+  let code: string | undefined;
+  let cause: "timeout" | "connection" = "connection";
+
+  // Innermost wins: the outer frame of a wrapped error is always
+  // `TypeError: fetch failed`, which identifies nothing.
+  for (let node: unknown = error, depth = 0; node && depth < 5; depth++) {
+    const candidate = node as { name?: string; code?: string; cause?: unknown };
+    if (typeof candidate.name === "string") name = candidate.name;
+    if (typeof candidate.code === "string") code = candidate.code;
+    if (
+      (candidate.name && TIMEOUT_NAMES.has(candidate.name)) ||
+      (candidate.code && TIMEOUT_CODES.has(candidate.code))
+    ) {
+      cause = "timeout";
+      break;
+    }
+    node = candidate.cause;
   }
-  return allowlistCache.ids;
+
+  return {
+    cause,
+    ...(name ? { errorName: name } : {}),
+    ...(code ? { errorCode: code } : {}),
+  };
 }
 
 /**
- * Configured, without the rollout question — a finalize carrying a run token
- * follows the lock through firebill whatever the ramp says.
+ * A body that arrived and would not parse — as distinct from one that never
+ * finished arriving, which is a transport failure and is thrown.
+ */
+const UNUSABLE_BODY = Symbol("unusable body");
+
+/** Whether a thrown error is, anywhere down its `cause` chain, a parse error. */
+function isSyntaxError(error: unknown): boolean {
+  for (let node: unknown = error, depth = 0; node && depth < 5; depth++) {
+    if (node instanceof SyntaxError) return true;
+    node = (node as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Read a JSON body, separating "firebill sent something we cannot read" from
+ * "the body never arrived".
+ *
+ * **Only a parse error is caught.** A body that times out or loses its
+ * connection after the headers arrived throws here too, and swallowing it would
+ * report a transport failure as an answer firebill gave — the exact confusion
+ * this file is being changed to remove. Those are re-thrown so
+ * {@link classifyTransportError} sees them.
+ *
+ * Releases the socket either way: undici holds the connection until the body is
+ * consumed, so a firebill that is erroring would otherwise exhaust the pool and
+ * turn one failure into a run of them.
+ */
+async function readJson(
+  response: Response,
+): Promise<Record<string, unknown> | typeof UNUSABLE_BODY> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (error) {
+    if (!isSyntaxError(error)) throw error;
+    response.body?.cancel().catch(() => {});
+    return UNUSABLE_BODY;
+  }
+}
+
+/**
+ * **firebill saying "I do not know".** A publish whose broker confirm timed out
+ * may have been taken anyway, so firebill answers `504` with
+ * `{"success": false, "ambiguous": true}` rather than the `{"success": false}`
+ * it sends when it is certain it took nothing.
+ *
+ * Read by field first and status second: the field is the contract, and the
+ * status is what an older firebill and every proxy in between would give us.
+ */
+function saysAmbiguous(
+  status: number,
+  body: Record<string, unknown> | typeof UNUSABLE_BODY,
+): boolean {
+  return (body !== UNUSABLE_BODY && body.ambiguous === true) || status === 504;
+}
+
+// firebill's answer bodies (firebill `src/api.rs`). `success` discriminates: it
+// sends `allowed`/`remaining` (check) and `allowed`/`lock_id`/… (lock) only when
+// `success: true`. Splitting the arms keeps an explicit `success: false`
+// (`refused`) distinct from a shape that matches neither (`unusable`).
+
+// `ambiguous` is read off the raw body by saysAmbiguous before this.
+const usageAnswerSchema = z.object({ success: z.boolean() });
+
+// `remaining` is lenient — a missing or non-finite figure falls back to the
+// clamp below rather than discarding the answer.
+const checkAnswerSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    allowed: z.boolean(),
+    remaining: z.number().finite().optional().catch(undefined),
+    // Epoch ms, within what a Date can hold: the 402 renders it with
+    // toISOString(). Caught to undefined: a mis-shaped reset time must not turn
+    // an answer into a fail-open.
+    resets_at: z
+      .number()
+      .int()
+      .positive()
+      .max(8_640_000_000_000_000)
+      .optional()
+      .catch(undefined),
+  }),
+  z.object({ success: z.literal(false) }),
+]);
+
+// `lock_id` is caught to undefined so a mis-shaped echo falls back to the
+// caller's own id; reason/operation_token are validated where they are read.
+const lockAnswerSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    allowed: z.boolean(),
+    lock_id: z.string().optional().catch(undefined),
+    reason: z.unknown().optional(),
+    operation_token: z.unknown().optional(),
+  }),
+  z.object({ success: z.literal(false) }),
+]);
+
+/**
+ * Whether firebill is configured. Every billing write goes through firebill;
+ * without it, billing is skipped.
  */
 export function firebillConfigured(): boolean {
   return Boolean(config.FIREBILL_URL && config.FIREBILL_SECRET);
-}
-
-/**
- * Whether this org's usage goes through firebill rather than straight to Autumn.
- * Needs firebill configured, then any of: the allowlist, being
- * partner-provisioned, or the sticky percentage.
- *
- * `gatewayProvisioned` is deliberately a parameter rather than a lookup in here:
- * this stays a pure function of config so it can be reasoned about and tested
- * without a database, and the caller already has the answer cached.
- *
- * It arrives in an options object rather than as a second positional argument
- * because this predicate is used as a callback — `orgs.filter(shouldRouteToFirebill)`
- * would otherwise pass the array *index* as it, routing everything but element
- * zero. Destructuring a field off a number yields undefined, so the object form
- * cannot be fooled that way.
- *
- * **This whole gateway branch is meant to be deleted.** It exists only because
- * the ramp is below 100: a gateway partner's usage must route deterministically,
- * and a sticky sample is a probability. At `FIREBILL_ROLLOUT_PERCENT=100` every
- * org routes anyway, the branch stops changing any outcome, and it — along with
- * the lookup feeding it — should go.
- */
-export function shouldRouteToFirebill(
-  orgId: string,
-  opts?: { gatewayProvisioned?: boolean },
-): boolean {
-  if (!firebillConfigured()) return false;
-  // Always-on set: test orgs stay routed even at 0 percent.
-  if (firebillOrgIds().has(orgId)) return true;
-  // A partner-provisioned org always routes: firebill is the only thing that
-  // knows how to split its usage between that org's own balance and the
-  // partner's, so a charge that misses firebill is billed wholly to an account
-  // nobody pays for, and the partner is silently never charged.
-  if (opts?.gatewayProvisioned) return true;
-  // Sticky by org, so a ramp only ever adds and 0 is the kill switch.
-  return sampled(orgId, config.FIREBILL_ROLLOUT_PERCENT);
 }
 
 // Plain concatenation rather than new URL(path, base): a leading-slash path
@@ -130,19 +298,21 @@ function firebillUrl(path: string): string {
  * firebill's /v1/refund endpoint expects the POSITIVE amount and negates it
  * itself, so the absolute value is sent either way.
  *
- * Returns true when firebill accepted the event, mirroring the boolean
- * contract of the direct Autumn track path. A `false` means firebill never
- * took it: nothing is retrying, and the usage goes unbilled.
+ * Returns true when firebill accepted the event. A `false` means firebill did not
+ * confirm it. An unanswered event is then handed to a durable retry that
+ * re-sends the identical event under the same idempotency key, so it is billed
+ * once whether or not the lost attempt landed; an explicit refusal is not.
  */
 export async function firebillTrack(params: TrackParams): Promise<boolean> {
-  const operation = params.value < 0 ? "refund" : "track";
+  const operation = trackOperation(params.value);
   const path = `/v1/${operation}`;
   // Both attempts must be the same event. Without a caller key firebill mints
   // one per request, so a retry after an accepted-but-lost first attempt would
   // be a second charge; minting here instead keeps one identity per call while
   // separate calls stay distinct, exactly as before.
+  const { durableRetry = true, ...event } = params;
   const attempted = {
-    ...params,
+    ...event,
     idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
 
@@ -162,13 +332,23 @@ export async function firebillTrack(params: TrackParams): Promise<boolean> {
     return true;
   }
 
-  // `refused` only for an explicit `success: false`, which is firebill saying it
-  // did not take the event. A transport failure is `ambiguous`: firebill may
-  // have accepted it and be delivering it right now, so this is not proof of
-  // lost usage. Either way the caller is told false and must not assume a
-  // charge landed. A counter rather than a throw: billing must not fail the
-  // customer's request, and a log alone is too quiet to alert on.
+  // **`refused` only for an explicit `success: false`.** That is firebill
+  // saying it did not take the event, and it is the one case that is proof the
+  // usage is gone — which is what the alert on this label means. Everything
+  // else is `ambiguous`: firebill may have accepted it and be delivering it
+  // right now. A confirm timeout now says so itself (a 504, or `ambiguous:
+  // true`); before that it arrived as a plain `success: false` and was logged
+  // 2,100 times over eight days as usage that would never be billed, all of
+  // which had in fact settled.
+  //
+  // Either way the caller is told false and must not assume a charge landed. A
+  // counter rather than a throw: billing must not fail the customer's request,
+  // and a log alone is too quiet to alert on.
   const outcome = last.reason === "not_success" ? "refused" : "ambiguous";
+  const handedToRetry =
+    outcome === "ambiguous" &&
+    durableRetry &&
+    (await enqueueFirebillTrackRetry(attempted));
   logger.error(
     outcome === "refused"
       ? "firebill refused a usage event; it will not be billed"
@@ -182,16 +362,159 @@ export async function firebillTrack(params: TrackParams): Promise<boolean> {
       callerSuppliedKey: params.idempotencyKey !== undefined,
       path,
       attempts: FIREBILL_ATTEMPTS,
+      handedToRetry,
       reason: last.reason,
+      cause: last.cause,
+      ...(last.status !== undefined ? { status: last.status } : {}),
+      ...(last.errorName ? { errorName: last.errorName } : {}),
+      ...(last.errorCode ? { errorCode: last.errorCode } : {}),
     },
   );
   firebillTrackTotal.labels(operation, outcome).inc();
+  // Beside the outcome, never inside it: the alerts read `outcome` with
+  // `increase()`, which evaluates per series, so a `cause` label on that counter
+  // would quietly turn one threshold into one threshold per cause.
+  firebillFailureCauseTotal.labels(operation, last.cause).inc();
   return false;
+}
+
+function trackOperation(value: number): "track" | "refund" {
+  return value < 0 ? "refund" : "track";
+}
+
+/**
+ * Hands an unanswered event to the durable retry queue. The job carries the
+ * whole event, key included, so every re-send is byte-for-byte the event the
+ * caller sent. Keyed by the idempotency key, so the same event enqueued twice
+ * (a stalled job re-running its charge) is one job.
+ */
+async function enqueueFirebillTrackRetry(
+  event: FirebillTrackRetryJobData,
+): Promise<boolean> {
+  const operation = trackOperation(event.value);
+  const context = {
+    customerId: event.customerId,
+    entityId: event.entityId,
+    featureId: event.featureId,
+    value: event.value,
+    idempotencyKey: event.idempotencyKey,
+  };
+  const timedOut = Symbol("enqueue timed out");
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const added = await Promise.race([
+      getFirebillTrackRetryQueue().add(operation, event, {
+        jobId: `firebill|${encodeURIComponent(event.idempotencyKey)}`,
+        delay: FIREBILL_DURABLE_RETRY_FIRST_DELAY_MS,
+        attempts: FIREBILL_DURABLE_RETRY_ATTEMPTS,
+        backoff: {
+          type: "exponential",
+          delay: FIREBILL_DURABLE_RETRY_BACKOFF_MS,
+        },
+      }),
+      new Promise<typeof timedOut>(resolve => {
+        timer = setTimeout(
+          () => resolve(timedOut),
+          FIREBILL_DURABLE_RETRY_ENQUEUE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    // The add is still in flight and may land: unknown, not lost.
+    if (added === timedOut) {
+      logger.error(
+        "firebill durable retry enqueue timed out; the retry may or may not have been queued",
+        { ...context, timeoutMs: FIREBILL_DURABLE_RETRY_ENQUEUE_TIMEOUT_MS },
+      );
+      firebillTrackRetryTotal.labels(operation, "enqueue_timeout").inc();
+      return false;
+    }
+    firebillTrackRetryTotal.labels(operation, "enqueued").inc();
+    return true;
+  } catch (error) {
+    logger.error(
+      "firebill durable retry could not be enqueued; the event will not be billed unless replayed",
+      { ...context, error },
+    );
+    firebillTrackRetryTotal.labels(operation, "enqueue_failed").inc();
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * One durable re-send of an event firebill never confirmed. Throws on any
+ * answer but accepted so the queue schedules the next attempt with backoff;
+ * the last failed attempt logs and counts the event as exhausted first.
+ *
+ * Any non-accepted answer is retried, a refusal included: an earlier attempt
+ * may still have landed, and the shared key makes a late duplicate a no-op.
+ */
+export async function processFirebillTrackRetry(
+  job: Job<FirebillTrackRetryJobData>,
+): Promise<void> {
+  const event = job.data;
+  const operation = trackOperation(event.value);
+  const attempt = job.attemptsMade + 1;
+  const attempts = job.opts.attempts ?? 1;
+
+  firebillTrackRetryTotal.labels(operation, "retried").inc();
+  const result = await firebillAttempt(`/v1/${operation}`, event);
+
+  const context = {
+    customerId: event.customerId,
+    entityId: event.entityId,
+    featureId: event.featureId,
+    value: event.value,
+    idempotencyKey: event.idempotencyKey,
+    attempt,
+    attempts,
+  };
+
+  if (result.ok) {
+    firebillTrackRetryTotal.labels(operation, "settled").inc();
+    logger.info("firebill accepted a usage event on durable retry", context);
+    return;
+  }
+
+  const failure = {
+    ...context,
+    reason: result.reason,
+    cause: result.cause,
+    ...(result.status !== undefined ? { status: result.status } : {}),
+  };
+  if (attempt >= attempts) {
+    firebillTrackRetryTotal.labels(operation, "exhausted").inc();
+    firebillTrackRetryExhaustedValueTotal
+      .labels(operation, event.featureId)
+      .inc(Math.abs(event.value));
+    logger.error(
+      "firebill durable retry exhausted; the event may not have been billed",
+      failure,
+    );
+  } else {
+    logger.warn("firebill durable retry attempt failed; will retry", failure);
+  }
+  throw new Error(
+    `firebill ${operation} retry ${attempt}/${attempts} failed: ${result.cause}`,
+  );
 }
 
 type AttemptResult =
   | { ok: true }
-  | { ok: false; reason: "not_ok" | "not_success" | "exception" };
+  | {
+      ok: false;
+      /**
+       * Kept as-is for `firebillRetryTotal`, plus `ambiguous` for the answer
+       * firebill did not used to be able to give.
+       */
+      reason: "not_ok" | "not_success" | "ambiguous" | "exception";
+      /** Who failed. See {@link FirebillCause}. */
+      cause: FirebillCause;
+      status?: number;
+      errorName?: string;
+      errorCode?: string;
+    };
 
 async function firebillAttempt(
   path: string,
@@ -202,6 +525,7 @@ async function firebillAttempt(
     value,
     properties,
     idempotencyKey,
+    externalRequestId,
   }: TrackParams,
 ): Promise<AttemptResult> {
   const url = firebillUrl(path);
@@ -213,11 +537,11 @@ async function firebillAttempt(
         "content-type": "application/json",
       },
       // No overage flag needed: firebill itself pins Autumn's
-      // overage_behavior to "overflow" on every upstream call, matching the
-      // direct-Autumn path below.
+      // overage_behavior to "overflow" on every upstream call.
       body: JSON.stringify({
         customer_id: customerId,
-        entity_id: entityId,
+        // Required by firebill; empty for a customer-level charge.
+        entity_id: entityId ?? "",
         feature_id: featureId,
         value: Math.abs(value),
         properties,
@@ -226,55 +550,105 @@ async function firebillAttempt(
         // than charged twice. Omitted → firebill mints a per-request UUID,
         // which dedupes only its own retries.
         ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        // The partner's own operation id. With it on the charge, firebill
+        // reports the operation without looking the request up in
+        // ClickHouse, which lands seconds after the charge.
+        ...(externalRequestId
+          ? { external_request_id: externalRequestId }
+          : {}),
       }),
       signal: AbortSignal.timeout(FIREBILL_TIMEOUT_MS),
     });
 
+    const context = { customerId, entityId, featureId, value, path };
+
     if (!response.ok) {
-      logger.warn("firebill track attempt failed — non-OK response", {
-        customerId,
-        entityId,
-        featureId,
-        value,
-        path,
+      const body = await readJson(response);
+      if (saysAmbiguous(response.status, body)) {
+        logger.warn("firebill did not know whether it took the event", {
+          ...context,
+          status: response.status,
+        });
+        return {
+          ok: false,
+          reason: "ambiguous",
+          cause: "ambiguous",
+          status: response.status,
+        };
+      }
+      logger.warn(
+        "firebill track attempt failed — firebill answered a non-OK status",
+        {
+          ...context,
+          status: response.status,
+        },
+      );
+      return {
+        ok: false,
+        reason: "not_ok",
+        cause: "non_ok",
         status: response.status,
-      });
-      return { ok: false, reason: "not_ok" };
+      };
     }
 
-    const body = (await response.json()) as { success?: boolean };
-    if (body.success !== true) {
-      logger.warn("firebill track attempt did not succeed", {
-        customerId,
-        entityId,
-        featureId,
-        value,
-        path,
+    const body = await readJson(response);
+    // Belt and braces: a 200 that still says it does not know is not a refusal.
+    if (saysAmbiguous(response.status, body)) {
+      logger.warn("firebill did not know whether it took the event", context);
+      return { ok: false, reason: "ambiguous", cause: "ambiguous" };
+    }
+    // **Only `success: false` is a refusal.** It is the one answer that is proof
+    // the event is gone, and it is what the `refused` alert means. A body we
+    // could not read, or one with no `success` in it, may well be firebill
+    // telling us it took the event in a shape we did not understand — so it is
+    // ambiguous, and the caller retries under the same key rather than logging
+    // usage as lost.
+    const parsed =
+      body === UNUSABLE_BODY ? undefined : usageAnswerSchema.safeParse(body);
+    if (parsed?.success && parsed.data.success === false) {
+      logger.warn("firebill refused the event — it did not take it", context);
+      return { ok: false, reason: "not_success", cause: "refused" };
+    }
+    if (!parsed?.success) {
+      logger.warn("firebill answered with a body we could not read", {
+        ...context,
+        status: response.status,
       });
-      return { ok: false, reason: "not_success" };
+      return { ok: false, reason: "ambiguous", cause: "unusable" };
     }
 
     logger.info("firebill track succeeded", {
-      customerId,
-      entityId,
-      featureId,
-      value,
-      path,
+      ...context,
+      ...billingSuccessFields(
+        path === "/v1/refund" ? "refund" : "track",
+        idempotencyKey,
+        Math.abs(value),
+        properties,
+      ),
     });
     return { ok: true };
   } catch (error) {
     // DO NOT fall back to Autumn directly: firebill may have accepted the event
     // before this failed, and the Autumn SDK sends no idempotency key, so the
     // pair could not be deduped and the customer would be billed twice.
-    logger.warn("firebill track attempt failed — firebill may be unavailable", {
-      customerId,
-      entityId,
-      featureId,
-      value,
-      path,
-      error,
-    });
-    return { ok: false, reason: "exception" };
+    const failure = classifyTransportError(error);
+    // **Not "firebill may be unavailable".** The request never completed, which
+    // says nothing about firebill: these are almost all our own 5s deadline
+    // firing against a service whose server-side p99 is 73ms.
+    logger.warn(
+      "firebill track request did not complete — client-side timeout or connection error; firebill did not answer",
+      {
+        customerId,
+        entityId,
+        featureId,
+        value,
+        path,
+        timeoutMs: FIREBILL_TIMEOUT_MS,
+        ...failure,
+        error,
+      },
+    );
+    return { ok: false, reason: "exception", ...failure };
   }
 }
 
@@ -294,7 +668,13 @@ async function firebillAttempt(
  * yes/no, `unavailable` means firebill could not answer at all.
  */
 type FirebillCheckResult =
-  | { status: "answered"; allowed: boolean; remaining: number }
+  | {
+      status: "answered";
+      allowed: boolean;
+      remaining: number;
+      /** When the balance behind the answer next resets, in epoch ms. */
+      resetsAt?: number;
+    }
   | { status: "unavailable" };
 
 /**
@@ -325,8 +705,12 @@ export async function firebillCheck({
   value: number;
   properties?: Record<string, unknown>;
 }): Promise<FirebillCheckResult> {
+  // `reason` is always a literal from the call sites below, so the rendered
+  // message stays a closed set that log search can group on; anything variable
+  // goes in `extra`.
   const unavailable = (
     reason: string,
+    cause: FirebillCause,
     extra?: Record<string, unknown>,
   ): FirebillCheckResult => {
     logger.error(`firebill check unavailable — ${reason}`, {
@@ -334,9 +718,11 @@ export async function firebillCheck({
       entityId,
       featureId,
       value,
+      cause,
       ...extra,
     });
     firebillCheckTotal.labels("unavailable").inc();
+    firebillFailureCauseTotal.labels("check", cause).inc();
     return { status: "unavailable" };
   };
 
@@ -358,32 +744,41 @@ export async function firebillCheck({
     });
 
     if (!response.ok) {
-      // Release the socket. Returning without reading or cancelling leaves the
-      // body unconsumed, and undici keeps the connection pinned until it is —
-      // so a firebill that is erroring would exhaust the pool and turn one
-      // failure into a run of them. Matters most here: this path is the one
-      // that fails open, so the leak would be silently widening the window in
-      // which credit checks are skipped.
-      response.body?.cancel().catch(() => {});
-      return unavailable("non-OK response", { status: response.status });
+      // `readJson` releases the socket whatever the body turns out to be.
+      // Returning without reading or cancelling leaves it unconsumed, and
+      // undici keeps the connection pinned until it is — so a firebill that is
+      // erroring would exhaust the pool and turn one failure into a run of
+      // them. Matters most here: this path is the one that fails open, so the
+      // leak would be silently widening the window in which credit checks are
+      // skipped.
+      const errorBody = await readJson(response);
+      return unavailable(
+        "firebill answered a non-OK status",
+        saysAmbiguous(response.status, errorBody) ? "ambiguous" : "non_ok",
+        { status: response.status },
+      );
     }
 
-    const body = (await response.json()) as {
-      success?: boolean;
-      allowed?: boolean;
-      remaining?: number;
-    };
+    const answered = await readJson(response);
+    if (answered === UNUSABLE_BODY) {
+      return unavailable("answered with a body we could not read", "unusable", {
+        status: response.status,
+      });
+    }
 
+    const parsed = checkAnswerSchema.safeParse(answered);
+    // Unreadable, not refused: a missing `success` or a mis-shaped `allowed` read
+    // as a denial would 402 a paying customer, and counting it `refused` would
+    // have anyone slicing by cause counting it a decline. So it fails open.
+    if (!parsed.success) {
+      return unavailable("answered without a usable shape", "unusable");
+    }
     // `success: false` is firebill saying it does not know — an unanswered
     // balance, or a gateway lookup that failed. Never a denial.
-    if (body.success !== true) {
-      return unavailable("firebill could not answer");
+    if (parsed.data.success === false) {
+      return unavailable("firebill could not answer", "refused");
     }
-    // A missing or mis-shaped `allowed` is not something firebill sends today.
-    // Reading it as a denial would 402 a paying customer, so it fails open.
-    if (typeof body.allowed !== "boolean") {
-      return unavailable("answered without a usable `allowed`");
-    }
+    const body = parsed.data;
 
     // `remaining` clamps downstream limits, and the safe default inverts with
     // `allowed`, so there is no single one.
@@ -414,9 +809,22 @@ export async function firebillCheck({
         remaining,
       });
     }
-    return { status: "answered", allowed: body.allowed, remaining };
+    return {
+      status: "answered",
+      allowed: body.allowed,
+      remaining,
+      ...(body.resets_at ? { resetsAt: body.resets_at } : {}),
+    };
   } catch (error) {
-    return unavailable("request threw", { error });
+    const failure = classifyTransportError(error);
+    // **Not "firebill is unavailable".** The request never completed, which is
+    // a statement about this process's socket, DNS or deadline — not about
+    // firebill, which never got the chance to answer.
+    return unavailable(
+      "the request did not complete (client-side timeout or connection error); firebill did not answer",
+      failure.cause,
+      { timeoutMs: FIREBILL_TIMEOUT_MS, ...failure, error },
+    );
   }
 }
 
@@ -466,36 +874,41 @@ export async function firebillLock({
       ),
     });
 
+    const context = { customerId, entityId, featureId, value, lockId };
+
     if (!response.ok) {
-      logger.error("firebill lock failed — non-OK response", {
-        customerId,
-        entityId,
-        featureId,
-        value,
-        lockId,
+      response.body?.cancel().catch(() => {});
+      logger.error("firebill lock failed — firebill answered a non-OK status", {
+        ...context,
         status: response.status,
       });
+      firebillFailureCauseTotal.labels("lock", "non_ok").inc();
       return { status: "unavailable" };
     }
 
-    const body = (await response.json()) as {
-      success?: boolean;
-      allowed?: boolean;
-      lock_id?: string;
-      reason?: unknown;
-      operation_token?: unknown;
-    };
-
-    if (body.success !== true) {
-      logger.error("firebill lock did not succeed", {
-        customerId,
-        entityId,
-        featureId,
-        value,
-        lockId,
+    const answered = await readJson(response);
+    // An answer we could not parse is firebill answering, not the network
+    // failing — so it must not fall through to the transport catch below and be
+    // reported as a connection error.
+    if (answered === UNUSABLE_BODY) {
+      logger.error("firebill lock answered with a body we could not read", {
+        ...context,
+        status: response.status,
       });
+      firebillFailureCauseTotal.labels("lock", "unusable").inc();
       return { status: "unavailable" };
     }
+    const parsed = lockAnswerSchema.safeParse(answered);
+    // Both proceed unlocked, but the cause has to tell them apart: an explicit
+    // `success: false` is `refused`, a shape matching neither arm is `unusable`.
+    if (!parsed.success || parsed.data.success === false) {
+      logger.error("firebill lock did not succeed", context);
+      firebillFailureCauseTotal
+        .labels("lock", parsed.success ? "refused" : "unusable")
+        .inc();
+      return { status: "unavailable" };
+    }
+    const body = parsed.data;
 
     if (body.allowed === false) {
       const reason = lockDeniedReason(body.reason);
@@ -510,21 +923,8 @@ export async function firebillLock({
       return { status: "denied", ...(reason ? { reason } : {}) };
     }
 
-    // Only an explicit `allowed: false` is a denial. `success: true` with a
-    // missing or mis-shaped `allowed` is not an answer firebill sends today;
-    // treating it as a denial would hard-stop the check (skipped_no_credits),
-    // so it maps to unavailable — proceed unlocked — instead.
-    if (body.allowed !== true) {
-      logger.error("firebill lock answered without a usable `allowed`", {
-        customerId,
-        entityId,
-        featureId,
-        value,
-        lockId,
-      });
-      return { status: "unavailable" };
-    }
-
+    // allowed is a schema-guaranteed boolean and the denial above took the
+    // false, so this is allowed: true.
     const operationToken =
       typeof body.operation_token === "string" &&
       body.operation_token.length > 0
@@ -545,14 +945,23 @@ export async function firebillLock({
       ...(operationToken ? { operationToken } : {}),
     };
   } catch (error) {
-    logger.error("firebill lock failed — firebill may be unavailable", {
-      customerId,
-      entityId,
-      featureId,
-      value,
-      lockId,
-      error,
-    });
+    const failure = classifyTransportError(error);
+    logger.error(
+      "firebill lock request did not complete — client-side timeout or connection error; firebill did not answer",
+      {
+        customerId,
+        entityId,
+        featureId,
+        value,
+        lockId,
+        timeoutMs: partnerJobToken
+          ? FIREBILL_GATED_LOCK_TIMEOUT_MS
+          : FIREBILL_TIMEOUT_MS,
+        ...failure,
+        error,
+      },
+    );
+    firebillFailureCauseTotal.labels("lock", failure.cause).inc();
     return { status: "unavailable" };
   }
 }
@@ -561,13 +970,12 @@ export async function firebillLock({
  * Settles a lock via firebill's `/v1/finalize`: `confirm` bills the hold,
  * `release` gives the balance back. firebill queues the settle durably and
  * retries it until it lands in Autumn, instead of dropping it when Autumn
- * blinks (the direct-Autumn path's failure mode — the lock then just expires,
- * which for a confirm means the work goes unbilled).
+ * blinks (a dropped settle just lets the lock expire, which for a confirm
+ * means the work goes unbilled).
  *
- * Returns true when firebill accepted the settle for delivery, mirroring the
- * void-and-log contract of the direct finalize path. No direct-Autumn
- * fallback, for the same reason as track: firebill may have durably queued
- * the settle before the call failed.
+ * Returns true when firebill accepted the settle for delivery. No
+ * direct-Autumn fallback, for the same reason as track: firebill may have
+ * durably queued the settle before the call failed.
  */
 export async function firebillFinalize({
   lockId,
@@ -589,6 +997,11 @@ export async function firebillFinalize({
   heldValue?: number | null;
 }): Promise<boolean> {
   const url = firebillUrl("/v1/finalize");
+  // Deterministic per (lock, action): the lock id is itself caller-chosen and
+  // stable (`monitor_${check.id}`), so a re-finalize of the same settle — e.g.
+  // the reconciler re-running a check it raced — dedupes upstream instead of
+  // settling twice.
+  const idempotencyKey = `fc:finalize:${action}:${lockId}`;
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -603,11 +1016,7 @@ export async function firebillFinalize({
           ? { override_value: overrideValue }
           : {}),
         properties,
-        // Deterministic per (lock, action): the lock id is itself caller-chosen
-        // and stable (`monitor_${check.id}`), so a re-finalize of the same
-        // settle — e.g. the reconciler re-running a check it raced — dedupes
-        // upstream instead of settling twice.
-        idempotency_key: `fc:finalize:${action}:${lockId}`,
+        idempotency_key: idempotencyKey,
         // The run token, brought home as this settle's operation id.
         ...(externalRequestId
           ? { external_request_id: externalRequestId }
@@ -630,39 +1039,72 @@ export async function firebillFinalize({
       signal: AbortSignal.timeout(FIREBILL_TIMEOUT_MS),
     });
 
+    const context = { lockId, action, overrideValue };
+
     if (!response.ok) {
-      logger.error("firebill finalize failed — non-OK response", {
-        lockId,
-        action,
-        overrideValue,
-        status: response.status,
-      });
+      const errorBody = await readJson(response);
+      // A settle firebill did not know it took is not a settle it refused. The
+      // finalize contract is a boolean either way — the schedule is what
+      // retries — but the log has to say which happened.
+      const ambiguous = saysAmbiguous(response.status, errorBody);
+      logger.error(
+        ambiguous
+          ? "firebill did not know whether it took the settle"
+          : "firebill finalize failed — firebill answered a non-OK status",
+        { ...context, status: response.status },
+      );
+      firebillFailureCauseTotal
+        .labels("finalize", ambiguous ? "ambiguous" : "non_ok")
+        .inc();
       return false;
     }
 
-    const body = (await response.json()) as { success?: boolean };
-    if (body.success !== true) {
-      logger.error("firebill finalize did not succeed", {
-        lockId,
-        action,
-        overrideValue,
+    const answered = await readJson(response);
+    // Answered but unreadable, which is not the network failing — the transport
+    // catch below must not claim it was.
+    if (answered === UNUSABLE_BODY) {
+      logger.error("firebill finalize answered with a body we could not read", {
+        ...context,
+        status: response.status,
       });
+      firebillFailureCauseTotal.labels("finalize", "unusable").inc();
+      return false;
+    }
+    const parsed = usageAnswerSchema.safeParse(answered);
+    if (!parsed.success || parsed.data.success !== true) {
+      logger.error("firebill finalize did not succeed", context);
+      firebillFailureCauseTotal
+        // Explicit `success: false` is `refused`; an unreadable shape `unusable`.
+        .labels("finalize", parsed.success ? "refused" : "unusable")
+        .inc();
       return false;
     }
 
     logger.info("firebill finalize succeeded", {
-      lockId,
-      action,
-      overrideValue,
+      ...context,
+      ...billingSuccessFields(
+        "finalize",
+        idempotencyKey,
+        // A release bills nothing; a confirm bills its override, else the hold.
+        action === "release" ? 0 : (overrideValue ?? heldValue ?? undefined),
+        properties,
+      ),
     });
     return true;
   } catch (error) {
-    logger.error("firebill finalize failed — firebill may be unavailable", {
-      lockId,
-      action,
-      overrideValue,
-      error,
-    });
+    const failure = classifyTransportError(error);
+    logger.error(
+      "firebill finalize request did not complete — client-side timeout or connection error; firebill did not answer",
+      {
+        lockId,
+        action,
+        overrideValue,
+        timeoutMs: FIREBILL_TIMEOUT_MS,
+        ...failure,
+        error,
+      },
+    );
+    firebillFailureCauseTotal.labels("finalize", failure.cause).inc();
     return false;
   }
 }
