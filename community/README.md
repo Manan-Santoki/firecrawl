@@ -52,6 +52,19 @@ The authenticated overlay also requires strong `APP_POSTGRES_PASSWORD`, its RFC 
 
 The overlay applies versioned, checksummed database migrations before seeding or starting the API. Existing authenticated volumes created before the migration ledger require the one-time reviewed baseline procedure documented there; the migrator will not infer or overwrite an untracked schema.
 
+## PII redaction service
+
+`redactPII` on scrape and parse calls a redaction service at `FIRE_PRIVACY_URL`. Firecrawl Cloud's service is private. The community replacement in [`apps/fire-privacy-community`](../apps/fire-privacy-community) implements the same `POST /redact` contract using Microsoft Presidio and a CPU spaCy model. Enable it with:
+
+```bash
+docker compose \
+  -f docker-compose.yaml \
+  -f community/docker-compose.privacy.yaml \
+  up --build
+```
+
+The overlay sets `FIRE_PRIVACY_URL` and raises `FIRE_PRIVACY_TIMEOUT_MS` to 30000 on the `api` service, which also runs the workers. The service stays on the Compose network because the stock API client sends no credentials. Detection quality differs from Cloud's hosted model. The capability remains `verification-needed` until an end-to-end scrape with `redactPII` is release-qualified. See the service README for entity coverage and configuration.
+
 ## Security boundary
 
 Compatibility tests must not call Firecrawl Cloud, copy private responses, or depend on a paid account. They may use public source, documentation, OpenAPI descriptions and official SDK behavior. Secrets belong in environment-scoped secret stores and must never be committed.

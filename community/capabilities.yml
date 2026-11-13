@@ -184,6 +184,15 @@
       "evidence": "A real PDF upload parsed to Markdown on staging; the complete hosted DOCX, XLSX, PPTX, OCR and layout matrix remains unqualified"
     },
     {
+      "id": "pii-redaction",
+      "group": "Documents",
+      "name": "PII redaction (redactPII)",
+      "cloud": true,
+      "community": "verification-needed",
+      "requirements": "Community privacy service (Presidio and spaCy, CPU) via community/docker-compose.privacy.yaml and FIRE_PRIVACY_URL",
+      "evidence": "The /redact contract is covered by service unit tests and a black-box test that ports the API client's response handling; no end-to-end scrape with redactPII has been release-qualified. Detection is Presidio patterns plus spaCy NER rather than the hosted model, so recall and precision differ from Cloud"
+    },
+    {
       "id": "media",
       "group": "Documents",
       "name": "Audio and video extraction",
