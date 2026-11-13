@@ -55,8 +55,15 @@ _ASYNC_CLIENT_ARG = "client: Async HTTP client."
 # Implementation functions (``research.py`` / ``aio/research.py``)
 # ---------------------------------------------------------------------------
 
+GITHUB_SEARCH_DEPRECATION_MSG = (
+    "The research index GitHub search endpoint behind search_github() was "
+    "removed after 2026-11-03. Use developer_search() instead. See "
+    "https://docs.firecrawl.dev/features/developer."
+)
+
+
 _SEARCH_PAPERS_TEMPLATE = """
-Search the research paper index by abstract relevance.
+Search the research paper index.
 
 Queries ~43M paper abstracts: PubMed, bioRxiv and medRxiv (about 90% of the
 corpus — biomedical and life sciences) plus arXiv (physics, mathematics,
@@ -77,6 +84,10 @@ Args:
         ``categories`` argument of ``search()``.
     from_date: Inclusive lower bound on publication date (``YYYY-MM-DD``).
     to_date: Inclusive upper bound on publication date (``YYYY-MM-DD``).
+    sort: ``relevance`` (default) or ``date_desc``, which returns the newest
+        of the most relevant matches, newest first by created date. It does
+        not list every paper in a date range; add ``from_date`` (and
+        ``to_date``) for that.
 
 Returns:
     Raw API ``dict`` with ``success`` and ``results``. Keys are camelCase
@@ -169,23 +180,21 @@ Note:
 """
 
 _SEARCH_GITHUB_TEMPLATE = """
-Search the developer index: GitHub issue/PR history and repository readmes.
+Search the **research index** GitHub slice: GitHub issue/PR history and
+repository readmes.
 
-This is the code-and-discussion companion to ``search_papers`` and is served
-by the same ``/v2/search/research`` surface. It searches indexed GitHub
-history and readmes — it does **not** search the paper corpus, and it is not
-the same as ``search(categories=["github"])`` (which is a ``site:github.com``
-filter on ordinary web search).
+.. deprecated::
+    The research index GitHub search endpoint was removed after 2026-11-03.
+    Use ``developer_search()`` instead. See
+    https://docs.firecrawl.dev/features/developer.
 
 Args:
     |CLIENT_ARG|
     query: Natural-language query, e.g. ``"pysam VCF parsing memory leak"``.
     k: Maximum number of results to return.
 
-Returns:
-    Raw API ``dict`` with ``success`` and ``results``. Keys are camelCase and
-    are **not** normalized to snake_case — expect ``resultType``, ``repo``,
-    ``url``, ``pageType``, ``number`` and a ``scoreBreakdown`` object.
+Raises:
+    FirecrawlError: Always. The API answers 410 Gone with the removal message.
 """
 
 SEARCH_PAPERS_DOC = _SEARCH_PAPERS_TEMPLATE.replace(_CLIENT_ARG, _SYNC_CLIENT_ARG)
@@ -206,7 +215,7 @@ AIO_SEARCH_GITHUB_DOC = _SEARCH_GITHUB_TEMPLATE.replace(_CLIENT_ARG, _ASYNC_CLIE
 # ---------------------------------------------------------------------------
 
 _CLIENT_SEARCH_PAPERS_TEMPLATE = """
-Search the research paper index by abstract relevance.
+Search the research paper index.
 
 Queries ~43M paper abstracts: PubMed, bioRxiv and medRxiv (about 90% of
 the corpus — biomedical and life sciences) plus arXiv (physics,
@@ -220,6 +229,10 @@ searches the paper index itself and returns ranked paper records.
 Args:
     query: Natural-language query, e.g. ``"CRISPR base editing
         off-target effects in primary human T cells"``.
+    sort: ``relevance`` (default) or ``date_desc``, which returns the newest
+        of the most relevant matches, newest first by created date. It does
+        not list every paper in a date range; add ``from_date`` (and
+        ``to_date``) for that.
     **kwargs: ``k``, ``authors``, ``categories``, ``from_date``,
         ``to_date``.
 
@@ -287,20 +300,20 @@ Note:
 """
 
 _CLIENT_SEARCH_GITHUB_TEMPLATE = """
-Search the developer index: GitHub issue/PR history and repo readmes.
+Search the **research index** GitHub slice: issue/PR history and repo
+readmes.
 
-The code-and-discussion companion to ``search_papers``, served by the
-same ``/v2/search/research`` surface. It does not search the paper
-corpus, and it is not ``search(categories=["github"])`` (which is just a
-``site:github.com`` filter on ordinary web search).
+.. deprecated::
+    The research index GitHub search endpoint was removed after
+    2026-11-03. Use ``developer_search()`` instead. See
+    https://docs.firecrawl.dev/features/developer.
 
 Args:
     query: Natural-language query, e.g. ``"pysam VCF parsing memory leak"``.
     **kwargs: ``k``.
 
-Returns:
-    Raw API ``dict`` with ``success`` and ``results``. Keys are
-    camelCase, **not** snake_case-normalized.
+Raises:
+    FirecrawlError: Always. The API answers 410 Gone with the removal message.
 """
 
 CLIENT_SEARCH_PAPERS_DOC = _CLIENT_SEARCH_PAPERS_TEMPLATE.replace(_AWAIT, "")

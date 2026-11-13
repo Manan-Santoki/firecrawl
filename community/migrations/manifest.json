@@ -4,7 +4,7 @@
   "advisoryLockName": "firecrawl-community-schema-migrations-v1",
   "sourceSchema": {
     "file": "../../apps/api/src/db/schema/public.ts",
-    "sha256": "5ed011f285d34fdd1ae2c7b8c6c3f69860be7c1ea759deb233d11f6c0973545c"
+    "sha256": "11c3cacc9c9cdab972bf9b8a41607e9f3c19eda4aee330aafc8fb2a0c882c08d"
   },
   "supportFiles": [
     "postgres/090-seed.sql"
@@ -55,6 +55,14 @@
       "description": "Restrict application RPC execution to the owning database role",
       "file": "postgres/050-revoke-public-rpc-execute.sql",
       "sha256": "edcef0d19c70d29247e73034ea3f563558a09a29df96d50047e62ce687854d10",
+      "transactional": true,
+      "irreversible": false
+    },
+    {
+      "version": "060-upstream-schema-sync",
+      "description": "Expand-only schema update for upstream v2.11.739",
+      "file": "postgres/060-upstream-schema-sync.sql",
+      "sha256": "36795deb039ce82ceac54c38eb3dd30aa696234d990f4353285d221fa2237454",
       "transactional": true,
       "irreversible": false
     }

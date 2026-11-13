@@ -27,10 +27,14 @@ import {
   idmux,
 } from "../lib";
 import { SearchV2Response } from "../../../lib/entities";
+import { sunsetOf } from "../../../lib/deprecations";
 
 // Re-export shared utilities for backwards compatibility
 export { scrapeTimeout, indexCooldown, Identity, idmux, TEST_API_URL };
 export default request;
+
+// From the extract sunset /v2/extract answers 410 instead of extracting.
+export const EXTRACT_LIVE = Date.now() < sunsetOf("v2_extract");
 
 const pollSleep = async () => new Promise(r => setTimeout(r, 50));
 
@@ -114,6 +118,10 @@ export type MonitorCreateInput = {
         url: string;
         crawlOptions?: Record<string, unknown>;
         scrapeOptions?: Record<string, unknown>;
+      }
+    | {
+        type: "search";
+        queries: string[];
       }
   >;
   retentionDays?: number;
@@ -349,6 +357,9 @@ export async function browserCreateRaw(
     ttl?: number;
     activityTtl?: number;
     recordSession?: boolean;
+    streamWebView?: boolean;
+    profile?: { name: string; saveChanges?: boolean };
+    location?: Record<string, unknown>;
   },
   identity: Identity,
 ) {
@@ -396,10 +407,7 @@ export async function browserReplayPageRaw(
 ) {
   return await request(TEST_API_URL)
     .get(
-      "/v2/interact/" +
-        encodeURIComponent(sessionId) +
-        "/replay/" +
-        encodeURIComponent(pageId),
+      `/v2/interact/${encodeURIComponent(sessionId)}/replay/${encodeURIComponent(pageId)}`,
     )
     .set("Authorization", `Bearer ${identity.apiKey}`)
     .send();
@@ -504,7 +512,7 @@ export async function asyncCrawlWaitForFinish(
   return x.body;
 }
 
-async function crawlErrors(
+export async function crawlErrors(
   id: string,
   identity: Identity,
 ): Promise<Exclude<CrawlErrorsResponse, ErrorResponse>> {
@@ -871,16 +879,21 @@ export async function creditUsage(
   return req.body.data;
 }
 
-export async function creditUsageHistorical(identity: Identity): Promise<{
+export async function creditUsageHistorical(
+  identity: Identity,
+  options: { byApiKey?: boolean } = {},
+): Promise<{
   success: boolean;
   periods: {
     startDate: string | null;
     endDate: string | null;
+    apiKey?: string;
     creditsUsed: number;
   }[];
 }> {
   const req = await request(TEST_API_URL)
     .get("/v2/team/credit-usage/historical")
+    .query(options.byApiKey ? { byApiKey: "true" } : {})
     .set("Authorization", `Bearer ${identity.apiKey}`)
     .set("Content-Type", "application/json");
 

@@ -20,6 +20,10 @@ import {
   TEST_API_URL,
 } from "./lib";
 import request from "./lib";
+import {
+  MAX_PATH_PATTERNS,
+  MAX_TOTAL_PATH_PATTERNS,
+} from "../../../lib/crawl-regex";
 import { describe, it, expect } from "vitest";
 
 let identity: Identity;
@@ -191,6 +195,98 @@ describe("Crawl tests", () => {
     10 * scrapeTimeout,
   );
 
+  it.concurrent(
+    "rejects path patterns that are too expensive to compile",
+    async () => {
+      // 19 characters that expand to a{15625}. Compiling patterns like this
+      // with the engine's default limits is a CPU denial-of-service vector.
+      const res = await crawlStart(
+        {
+          url: "https://firecrawl.dev",
+          excludePaths: ["a{5}{5}{5}{5}{5}{5}"],
+        },
+        identity,
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/exceeds size limit/);
+    },
+    scrapeTimeout,
+  );
+
+  it.concurrent(
+    "accepts several hundred keyword path patterns per field",
+    async () => {
+      const res = await crawlStart(
+        {
+          url: "https://firecrawl.dev",
+          limit: 1,
+          includePaths: Array.from({ length: 300 }, (_, i) => `topic${i}`),
+          excludePaths: Array.from({ length: 300 }, (_, i) => `skip${i}`),
+        },
+        identity,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(typeof res.body.id).toBe("string");
+    },
+    scrapeTimeout,
+  );
+
+  it.concurrent(
+    "rejects more path patterns than the engine will compile",
+    async () => {
+      const res = await crawlStart(
+        {
+          url: "https://firecrawl.dev",
+          excludePaths: Array.from(
+            { length: MAX_PATH_PATTERNS + 1 },
+            (_, i) => `^/p${i}`,
+          ),
+        },
+        identity,
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      // Schema-level (non-custom) issues are reported in details, not error.
+      expect(
+        res.body.details.map((issue: { message: string }) => issue.message),
+      ).toContainEqual(
+        expect.stringMatching(
+          new RegExp(`at most ${MAX_PATH_PATTERNS} patterns`),
+        ),
+      );
+    },
+    scrapeTimeout,
+  );
+
+  it.concurrent(
+    "rejects include and exclude patterns that together exceed the budget",
+    async () => {
+      const half = Math.floor(MAX_TOTAL_PATH_PATTERNS / 2) + 1;
+      const res = await crawlStart(
+        {
+          url: "https://firecrawl.dev",
+          includePaths: Array.from({ length: half }, (_, i) => `^/a${i}`),
+          excludePaths: Array.from({ length: half }, (_, i) => `^/b${i}`),
+        },
+        identity,
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(
+        new RegExp(
+          `together accept at most ${MAX_TOTAL_PATH_PATTERNS} patterns`,
+        ),
+      );
+    },
+    scrapeTimeout,
+  );
+
   // TODO: port to new dynamic url system
   // concurrentIf(ALLOW_TEST_SUITE_WEBSITE)(
   //   "filters URLs properly when using regexOnFullURL",
@@ -250,6 +346,43 @@ describe("Crawl tests", () => {
         const expectedDuration = (completedAtMs - createdAtMs) / 1000;
         expect(Math.abs(results.duration! - expectedDuration)).toBeLessThan(1);
       }
+    },
+    10 * scrapeTimeout,
+  );
+
+  it.concurrent(
+    "crawl status completedAt follows the failed jobs when no page succeeds",
+    async () => {
+      // The start URL cannot resolve, so the only job in the crawl fails.
+      const results = await crawl(
+        {
+          url: `https://crawl-completed-at-${crypto.randomUUID()}.invalid/`,
+          limit: 1,
+        },
+        identity,
+        false,
+      );
+      const afterCrawl = Date.now();
+
+      expect(results.success).toBe(true);
+      if (!results.success) return;
+      expect(results.status).not.toBe("scraping");
+      expect(results.completed).toBe(0);
+      expect(typeof results.createdAt).toBe("string");
+      expect(typeof results.completedAt).toBe("string");
+
+      const createdAtMs = new Date(results.createdAt!).getTime();
+      const completedAtMs = new Date(results.completedAt!).getTime();
+
+      // Before the fix, completedAt fell back to createdAt (duration 0)
+      // because only successful jobs had a finish time.
+      expect(completedAtMs).toBeGreaterThan(createdAtMs);
+      expect(results.duration).toBeGreaterThan(0);
+
+      // completedAt must not be later than the moment the crawl was seen as
+      // done. Allow a small gap for clock differences between the test
+      // runner and the worker.
+      expect(completedAtMs).toBeLessThanOrEqual(afterCrawl + 1000);
     },
     10 * scrapeTimeout,
   );
@@ -610,7 +743,7 @@ describe("Crawl tests", () => {
       // Check specifically for robots.txt warning
       if (results.warning && results.warning.includes("robots.txt")) {
         expect(results.warning).toContain("robots.txt");
-        expect(results.warning).toContain("/scrape endpoint");
+        expect(results.warning).toContain("robotsBlocked");
       }
     },
     10 * scrapeTimeout,

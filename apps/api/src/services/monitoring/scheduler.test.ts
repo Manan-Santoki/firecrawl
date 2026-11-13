@@ -1,17 +1,29 @@
 import type { MockedFunction } from "vitest";
+import { getACUCTeam } from "../../controllers/auth";
+import type { TeamFlags } from "../../controllers/v2/types";
 import { addMonitorCheckJob } from "./queue";
-import { enqueueDueMonitorChecks } from "./scheduler";
+import {
+  enqueueDueMonitorChecks,
+  MONITOR_ZDR_PAUSED_ERROR,
+  monitorRefusedForZdr,
+} from "./scheduler";
 import { isMonitorCheckStale } from "./stale";
 import {
   advanceMonitorAfterSkippedCheck,
   claimDueMonitors,
   createMonitorCheck,
   dispatchScheduledMonitorCheck,
-  getMonitorCheck,
+  getMonitorCheckForUpdate,
+  updateMonitor,
   updateMonitorCheck,
+  updateMonitorCheckIfStatus,
   updateMonitorScheduleAfterRun,
 } from "./store";
 import { autumnService } from "../autumn/autumn.service";
+
+vi.mock("../../controllers/auth", () => ({
+  getACUCTeam: vi.fn(),
+}));
 
 vi.mock("./queue", () => ({
   addMonitorCheckJob: vi.fn(),
@@ -22,8 +34,10 @@ vi.mock("./store", () => ({
   claimDueMonitors: vi.fn(),
   createMonitorCheck: vi.fn(),
   dispatchScheduledMonitorCheck: vi.fn(),
-  getMonitorCheck: vi.fn(),
+  getMonitorCheckForUpdate: vi.fn(),
+  updateMonitor: vi.fn(),
   updateMonitorCheck: vi.fn(),
+  updateMonitorCheckIfStatus: vi.fn(),
   updateMonitorScheduleAfterRun: vi.fn(),
 }));
 
@@ -52,8 +66,8 @@ const mockDispatchScheduledMonitorCheck =
   dispatchScheduledMonitorCheck as MockedFunction<
     typeof dispatchScheduledMonitorCheck
   >;
-const mockGetMonitorCheck = getMonitorCheck as MockedFunction<
-  typeof getMonitorCheck
+const mockGetMonitorCheckForUpdate = getMonitorCheckForUpdate as MockedFunction<
+  typeof getMonitorCheckForUpdate
 >;
 const mockIsMonitorCheckStale = isMonitorCheckStale as MockedFunction<
   typeof isMonitorCheckStale
@@ -73,6 +87,45 @@ const mockUpdateMonitorScheduleAfterRun =
   updateMonitorScheduleAfterRun as MockedFunction<
     typeof updateMonitorScheduleAfterRun
   >;
+const mockGetACUCTeam = getACUCTeam as MockedFunction<typeof getACUCTeam>;
+const mockUpdateMonitor = updateMonitor as MockedFunction<typeof updateMonitor>;
+
+describe("monitorRefusedForZdr", () => {
+  const scrape = [{ type: "scrape" }];
+  const search = [{ type: "scrape" }, { type: "search" }];
+
+  it.each<[string, TeamFlags | undefined, { type: string }[], boolean]>([
+    ["no ZDR flags", undefined, search, false],
+    ["scrapeZDR forced, scrape targets", { scrapeZDR: "forced" }, scrape, true],
+    ["searchZDR forced, search target", { searchZDR: "forced" }, search, true],
+    [
+      "searchZDR forced-zdr, search target",
+      { searchZDR: "forced-zdr" },
+      search,
+      true,
+    ],
+    [
+      "searchZDR forced-anon, search target",
+      { searchZDR: "forced-anon" },
+      search,
+      true,
+    ],
+    [
+      "searchZDR forced-zdr, scrape targets only",
+      { searchZDR: "forced-zdr" },
+      scrape,
+      false,
+    ],
+    [
+      "searchZDR allowed, search target",
+      { searchZDR: "allowed" },
+      search,
+      false,
+    ],
+  ])("%s", (_label, flags, targets, refused) => {
+    expect(monitorRefusedForZdr(flags, targets)).toBe(refused);
+  });
+});
 
 describe("monitoring scheduler", () => {
   const monitor = {
@@ -92,11 +145,20 @@ describe("monitoring scheduler", () => {
     mockCreateMonitorCheck.mockResolvedValue(check);
     mockDispatchScheduledMonitorCheck.mockResolvedValue(true);
     mockAddMonitorCheckJob.mockResolvedValue(undefined);
+    mockUpdateMonitorCheck.mockImplementation(
+      async (id, patch) =>
+        ({
+          id,
+          ...patch,
+        }) as any,
+    );
     mockAdvanceMonitorAfterSkippedCheck.mockResolvedValue(undefined);
     mockUpdateMonitorScheduleAfterRun.mockResolvedValue(undefined);
-    mockGetMonitorCheck.mockResolvedValue(null);
+    mockGetMonitorCheckForUpdate.mockResolvedValue(null);
     mockIsMonitorCheckStale.mockReturnValue(false);
-    mockFinalizeCreditsLock.mockResolvedValue(undefined as any);
+    mockFinalizeCreditsLock.mockResolvedValue(true);
+    mockGetACUCTeam.mockResolvedValue(null);
+    mockUpdateMonitor.mockResolvedValue(null);
   });
 
   it("dispatches and advances a scheduled monitor before enqueueing its job", async () => {
@@ -145,6 +207,93 @@ describe("monitoring scheduler", () => {
     );
   });
 
+  it("pauses a monitor whose team requires zero data retention instead of running it", async () => {
+    const refused = { id: check.id, status: "failed" } as any;
+    mockGetACUCTeam.mockResolvedValue({
+      flags: { scrapeZDR: "forced" },
+    } as any);
+    mockUpdateMonitorCheck.mockResolvedValue(refused);
+
+    await expect(
+      enqueueDueMonitorChecks({ workerId: "worker-1" }),
+    ).resolves.toBe(0);
+
+    expect(mockGetACUCTeam).toHaveBeenCalledWith(monitor.team_id);
+    expect(mockCreateMonitorCheck).toHaveBeenCalledExactlyOnceWith({
+      monitor,
+      trigger: "scheduled",
+      scheduledFor: monitor.next_run_at,
+      status: "failed",
+    });
+    expect(mockUpdateMonitorCheck).toHaveBeenCalledWith(check.id, {
+      status: "failed",
+      finished_at: expect.any(String),
+      error: MONITOR_ZDR_PAUSED_ERROR,
+    });
+    expect(mockUpdateMonitor).toHaveBeenCalledWith({
+      teamId: monitor.team_id,
+      monitorId: monitor.id,
+      input: { status: "paused" },
+    });
+    expect(mockAdvanceMonitorAfterSkippedCheck).toHaveBeenCalledWith({
+      monitor,
+      check: refused,
+    });
+    expect(mockUpdateMonitor.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAdvanceMonitorAfterSkippedCheck.mock.invocationCallOrder[0],
+    );
+    expect(mockDispatchScheduledMonitorCheck).not.toHaveBeenCalled();
+    expect(mockAddMonitorCheckJob).not.toHaveBeenCalled();
+  });
+
+  it("pauses a search monitor whose team requires zero data retention for search", async () => {
+    const searchMonitor = {
+      ...monitor,
+      targets: [{ id: "t-1", type: "search" }],
+    } as any;
+    mockClaimDueMonitors.mockResolvedValue([searchMonitor]);
+    mockGetACUCTeam.mockResolvedValue({
+      flags: { searchZDR: "forced-zdr" },
+    } as any);
+
+    await expect(
+      enqueueDueMonitorChecks({ workerId: "worker-1" }),
+    ).resolves.toBe(0);
+
+    expect(mockCreateMonitorCheck).toHaveBeenCalledExactlyOnceWith({
+      monitor: searchMonitor,
+      trigger: "scheduled",
+      scheduledFor: searchMonitor.next_run_at,
+      status: "failed",
+    });
+    expect(mockUpdateMonitor).toHaveBeenCalledWith({
+      teamId: searchMonitor.team_id,
+      monitorId: searchMonitor.id,
+      input: { status: "paused" },
+    });
+    expect(mockAddMonitorCheckJob).not.toHaveBeenCalled();
+  });
+
+  it("keeps running a scrape monitor when only search requires zero data retention", async () => {
+    mockGetACUCTeam.mockResolvedValue({
+      flags: { searchZDR: "forced-anon" },
+    } as any);
+
+    await expect(
+      enqueueDueMonitorChecks({ workerId: "worker-1" }),
+    ).resolves.toBe(1);
+
+    expect(mockUpdateMonitor).not.toHaveBeenCalled();
+    expect(mockAddMonitorCheckJob).toHaveBeenCalledWith(
+      {
+        monitorId: monitor.id,
+        checkId: check.id,
+        teamId: monitor.team_id,
+      },
+      { search: false },
+    );
+  });
+
   it("fails and clears a dispatched check when enqueueing fails", async () => {
     const error = new Error("queue unavailable");
     const failed = { id: check.id, status: "failed" } as any;
@@ -187,6 +336,36 @@ describe("monitoring scheduler", () => {
     });
   });
 
+  it("records an overlap while the current check is still active", async () => {
+    const active = { id: "active-check", status: "running" } as any;
+    const monitorWithCurrentCheck = {
+      ...monitor,
+      current_check_id: active.id,
+    };
+    const skipped = { id: check.id, status: "skipped_overlap" } as any;
+    mockClaimDueMonitors.mockResolvedValue([monitorWithCurrentCheck]);
+    mockGetMonitorCheckForUpdate.mockResolvedValue(active);
+    mockUpdateMonitorCheck.mockResolvedValue(skipped);
+
+    await expect(enqueueDueMonitorChecks()).resolves.toBe(0);
+
+    expect(mockCreateMonitorCheck).toHaveBeenCalledExactlyOnceWith({
+      monitor: monitorWithCurrentCheck,
+      trigger: "scheduled",
+      scheduledFor: monitor.next_run_at,
+      status: "skipped_overlap",
+    });
+    expect(mockAdvanceMonitorAfterSkippedCheck).toHaveBeenCalledExactlyOnceWith(
+      {
+        monitor: monitorWithCurrentCheck,
+        check: skipped,
+      },
+    );
+    expect(updateMonitorCheckIfStatus).not.toHaveBeenCalled();
+    expect(mockDispatchScheduledMonitorCheck).not.toHaveBeenCalled();
+    expect(mockAddMonitorCheckJob).not.toHaveBeenCalled();
+  });
+
   it("clears a stale current check before enqueueing a scheduled run", async () => {
     const monitorWithCurrentCheck = {
       ...monitor,
@@ -194,25 +373,33 @@ describe("monitoring scheduler", () => {
     } as any;
     const staleCheck = { id: "stale-check", status: "running" } as any;
     const failedStaleCheck = { ...staleCheck, status: "failed" } as any;
+    const finalizedStaleCheck = {
+      ...failedStaleCheck,
+      billing_status: "not_applicable",
+    };
     mockClaimDueMonitors.mockResolvedValue([monitorWithCurrentCheck]);
-    mockGetMonitorCheck.mockResolvedValue(staleCheck);
+    mockGetMonitorCheckForUpdate.mockResolvedValue(staleCheck);
     mockIsMonitorCheckStale.mockReturnValue(true);
-    mockUpdateMonitorCheck.mockResolvedValue(failedStaleCheck);
+    vi.mocked(updateMonitorCheckIfStatus).mockResolvedValue(failedStaleCheck);
+    mockUpdateMonitorCheck.mockResolvedValue(finalizedStaleCheck);
 
     await expect(
       enqueueDueMonitorChecks({ workerId: "worker-1" }),
     ).resolves.toBe(1);
 
-    expect(mockUpdateMonitorCheck).toHaveBeenCalledWith(staleCheck.id, {
-      status: "failed",
-      finished_at: expect.any(String),
-      actual_credits: 0,
-      billing_status: "not_applicable",
-      error: "Monitor check exceeded the 1 hour running timeout.",
-    });
+    expect(updateMonitorCheckIfStatus).toHaveBeenCalledWith(
+      staleCheck.id,
+      "running",
+      {
+        status: "failed",
+        finished_at: expect.any(String),
+        actual_credits: 0,
+        error: "Monitor check exceeded the 1 hour running timeout.",
+      },
+    );
     expect(mockUpdateMonitorScheduleAfterRun).toHaveBeenCalledWith({
       monitor: monitorWithCurrentCheck,
-      check: failedStaleCheck,
+      check: finalizedStaleCheck,
     });
     expect(mockCreateMonitorCheck).toHaveBeenCalledWith({
       monitor: { ...monitorWithCurrentCheck, current_check_id: null },
@@ -228,4 +415,160 @@ describe("monitoring scheduler", () => {
       { search: false },
     );
   });
+  it.each(["running", "queued"] as const)(
+    "releases a stale %s hold only after claiming failure",
+    async status => {
+      const stale = {
+        id: "stale-check",
+        status,
+        autumn_lock_id: "monitor_stale-check",
+      } as any;
+      mockClaimDueMonitors.mockResolvedValue([
+        { ...monitor, current_check_id: stale.id },
+      ]);
+      mockGetMonitorCheckForUpdate.mockResolvedValue(stale);
+      mockIsMonitorCheckStale.mockReturnValue(true);
+      vi.mocked(updateMonitorCheckIfStatus).mockResolvedValue({
+        ...stale,
+        status: "failed",
+      });
+
+      await enqueueDueMonitorChecks();
+
+      expect(updateMonitorCheckIfStatus).toHaveBeenCalledWith(
+        stale.id,
+        status,
+        expect.objectContaining({ status: "failed" }),
+      );
+      expect(mockFinalizeCreditsLock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lockId: stale.autumn_lock_id,
+          action: "release",
+        }),
+      );
+      expect(
+        vi.mocked(updateMonitorCheckIfStatus).mock.invocationCallOrder[0],
+      ).toBeLessThan(mockFinalizeCreditsLock.mock.invocationCallOrder[0]);
+    },
+  );
+
+  it("does not release or rewrite a check when another finalizer wins the terminal claim", async () => {
+    const stale = {
+      id: "stale-check",
+      status: "running",
+      autumn_lock_id: "monitor_stale-check",
+    } as any;
+    mockClaimDueMonitors.mockResolvedValue([
+      { ...monitor, current_check_id: stale.id },
+    ]);
+    mockGetMonitorCheckForUpdate.mockResolvedValue(stale);
+    mockIsMonitorCheckStale.mockReturnValue(true);
+    vi.mocked(updateMonitorCheckIfStatus).mockResolvedValue(null);
+
+    await enqueueDueMonitorChecks();
+
+    expect(mockFinalizeCreditsLock).not.toHaveBeenCalled();
+    expect(mockUpdateMonitorScheduleAfterRun).not.toHaveBeenCalled();
+    expect(mockCreateMonitorCheck).not.toHaveBeenCalled();
+    expect(mockUpdateMonitorCheck).not.toHaveBeenCalled();
+    expect(mockAdvanceMonitorAfterSkippedCheck).not.toHaveBeenCalled();
+    expect(mockDispatchScheduledMonitorCheck).not.toHaveBeenCalled();
+    expect(mockAddMonitorCheckJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { previousLock: null, claimedLock: "current-lock" },
+    { previousLock: "previous-lock", claimedLock: null },
+    { previousLock: "previous-lock", claimedLock: "current-lock" },
+  ])(
+    "settles the claimed hold when it changes from $previousLock to $claimedLock",
+    async ({ previousLock, claimedLock }) => {
+      const current = {
+        id: "stale-check",
+        status: "running",
+        autumn_lock_id: previousLock,
+      } as any;
+      const claimed = {
+        ...current,
+        status: "failed",
+        autumn_lock_id: claimedLock,
+      };
+      mockClaimDueMonitors.mockResolvedValue([
+        { ...monitor, current_check_id: current.id },
+      ]);
+      mockGetMonitorCheckForUpdate.mockResolvedValue(current);
+      mockIsMonitorCheckStale.mockReturnValue(true);
+      vi.mocked(updateMonitorCheckIfStatus).mockResolvedValue(claimed);
+      mockUpdateMonitorCheck.mockImplementation(async (_id, patch) => ({
+        ...claimed,
+        ...patch,
+      }));
+
+      await enqueueDueMonitorChecks();
+
+      expect(
+        vi.mocked(updateMonitorCheckIfStatus).mock.calls[0][2],
+      ).not.toHaveProperty("billing_status");
+      if (claimedLock) {
+        expect(mockFinalizeCreditsLock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ lockId: claimedLock, action: "release" }),
+        );
+      } else {
+        expect(mockFinalizeCreditsLock).not.toHaveBeenCalled();
+      }
+      expect(mockUpdateMonitorCheck).toHaveBeenCalledWith(current.id, {
+        billing_status: claimedLock ? "released" : "not_applicable",
+      });
+      expect(mockUpdateMonitorScheduleAfterRun).toHaveBeenCalledWith({
+        monitor: expect.objectContaining({ id: monitor.id }),
+        check: expect.objectContaining({
+          autumn_lock_id: claimedLock,
+          billing_status: claimedLock ? "released" : "not_applicable",
+        }),
+      });
+    },
+  );
+
+  it.each(["success", "refused", "throw"] as const)(
+    "records a stale hold release outcome of %s before advancing the schedule",
+    async outcome => {
+      const current = {
+        id: "stale-check",
+        status: "running",
+        autumn_lock_id: "monitor_stale-check",
+      } as any;
+      const claimed = { ...current, status: "failed" };
+      mockClaimDueMonitors.mockResolvedValue([
+        { ...monitor, current_check_id: current.id },
+      ]);
+      mockGetMonitorCheckForUpdate.mockResolvedValue(current);
+      mockIsMonitorCheckStale.mockReturnValue(true);
+      vi.mocked(updateMonitorCheckIfStatus).mockResolvedValue(claimed);
+      mockUpdateMonitorCheck.mockImplementation(async (_id, patch) => ({
+        ...claimed,
+        ...patch,
+      }));
+      if (outcome === "throw") {
+        mockFinalizeCreditsLock.mockRejectedValue(
+          new Error("Release unavailable"),
+        );
+      } else {
+        mockFinalizeCreditsLock.mockResolvedValue(outcome === "success");
+      }
+
+      await expect(enqueueDueMonitorChecks()).resolves.toBe(1);
+
+      const billingStatus = outcome === "success" ? "released" : "failed";
+      expect(mockUpdateMonitorCheck).toHaveBeenCalledWith(current.id, {
+        billing_status: billingStatus,
+      });
+      expect(mockUpdateMonitorScheduleAfterRun).toHaveBeenCalledExactlyOnceWith(
+        {
+          monitor: expect.objectContaining({ id: monitor.id }),
+          check: { ...claimed, billing_status: billingStatus },
+        },
+      );
+      expect(mockAddMonitorCheckJob).toHaveBeenCalledTimes(1);
+    },
+  );
 });

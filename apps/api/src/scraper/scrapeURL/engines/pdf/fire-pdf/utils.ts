@@ -1,7 +1,17 @@
 import type { Meta } from "../../..";
 import type { PDFMode } from "../../../../../controllers/v2/types";
+import type { FirePdfTrainingCapture } from "./request-metadata";
 import { config } from "../../../../../config";
-import { MAX_DEADLINE_MS, POLL_FLOOR_MS, POLL_CAP_MS } from "./schema";
+import {
+  INLINE_JOB_DEADLINE_MARGIN_FRACTION,
+  INLINE_JOB_DEADLINE_MARGIN_MAX_MS,
+  INLINE_JOB_DEADLINE_MARGIN_MIN_MS,
+  JOB_DEADLINE_POLL_GRACE_MS,
+  MAX_DEADLINE_MS,
+  MIN_DEADLINE_MS,
+  POLL_FLOOR_MS,
+  POLL_CAP_MS,
+} from "./schema";
 import { firePdfAsyncFallbackTotal, type FallbackReason } from "./metrics";
 
 export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -37,6 +47,45 @@ export function nextPollDelay(
   const candidate = Math.max(prev * 2, retryAfterMs ?? 0, POLL_FLOOR_MS);
   const jittered = Math.round(candidate * (1 + random() * 0.2));
   return Math.min(POLL_CAP_MS, jittered);
+}
+
+/**
+ * Deadline for an INLINE job: the caller window minus a margin, never below
+ * fire-pdf's 5s minimum. The worker plans its work against this deadline and
+ * degrades what is left when it arrives; the margin is what lets that result
+ * be written, observed by a poll, and fetched before the caller's own abort
+ * fires at the end of the window. Advertising the full window instead means
+ * the worker is still finishing when the caller gives up — the job is
+ * cancelled and the caller sees a timeout with nothing to show for it.
+ */
+export function computeInlineJobDeadlineMs(callerWindowMs: number): number {
+  const margin = Math.min(
+    INLINE_JOB_DEADLINE_MARGIN_MAX_MS,
+    Math.max(
+      INLINE_JOB_DEADLINE_MARGIN_MIN_MS,
+      Math.round(callerWindowMs * INLINE_JOB_DEADLINE_MARGIN_FRACTION),
+    ),
+  );
+  return Math.max(MIN_DEADLINE_MS, callerWindowMs - margin);
+}
+
+/**
+ * Cap a poll delay so a poll lands just after the job deadline, and keep
+ * polling at the floor once the deadline has passed. Backoff (up to
+ * POLL_CAP_MS plus jitter) is right while the job is mid-flight; around the
+ * deadline it is exactly wrong, because the result appears there and the
+ * caller's window closes shortly after. A job deadline beyond the caller
+ * window (by-reference) leaves the delay untouched.
+ */
+export function alignPollDelay(
+  delayMs: number,
+  nowMs: number,
+  jobDeadlineAtMs: number | undefined,
+): number {
+  if (jobDeadlineAtMs === undefined) return delayMs;
+  const untilTarget = jobDeadlineAtMs + JOB_DEADLINE_POLL_GRACE_MS - nowMs;
+  if (untilTarget <= 0) return Math.min(delayMs, POLL_FLOOR_MS);
+  return Math.min(delayMs, Math.max(POLL_FLOOR_MS, untilTarget));
 }
 
 export function computeDeadlineMs(scrapeTimeoutMs: number | undefined): number {
@@ -110,11 +159,21 @@ export function buildFirePdfJobOptions(args: {
   includePageMarkdown: boolean;
   includeBlocks: boolean;
   pageMarkers: boolean;
+  tableFormat: string | undefined;
+  trainingCapture: FirePdfTrainingCapture | undefined;
+  dataRegion: string | undefined;
+  reserved?: boolean;
 }): Record<string, unknown> {
   return {
-    ...(args.pagesProcessed !== undefined && {
-      pages_estimate: args.pagesProcessed,
-    }),
+    // fire-pdf accepts only a positive integer here. When the router has no
+    // page count (0), the field is left out and fire-pdf counts the pages
+    // itself on inline submits. By-reference submits require a positive
+    // count and check for one before they get here.
+    ...(args.pagesProcessed !== undefined &&
+      Number.isInteger(args.pagesProcessed) &&
+      args.pagesProcessed > 0 && {
+        pages_estimate: args.pagesProcessed,
+      }),
     ...(args.maxPages !== undefined && { max_pages: args.maxPages }),
     ...(args.mode !== undefined && { mode: args.mode }),
     ...(args.includePageMarkdown && { include_page_markdown: true }),
@@ -125,6 +184,14 @@ export function buildFirePdfJobOptions(args: {
     // `page_markers`. Sending snake_case here would be rejected as an
     // unknown option.
     ...(args.pageMarkers && { pageMarkers: true }),
+    ...(args.tableFormat !== undefined && { tableFormat: args.tableFormat }),
+    ...(args.trainingCapture && { training_capture: args.trainingCapture }),
+    // An idempotency key on the PDF service, so a pinned lookup only adopts
+    // a pinned job.
+    ...(args.dataRegion && { data_region: args.dataRegion }),
+    // Also an idempotency key, so a restricted lookup only adopts a job
+    // restricted the same way.
+    ...(args.reserved && { reserved: true }),
   };
 }
 
