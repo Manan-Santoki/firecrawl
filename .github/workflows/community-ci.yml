@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, "sync/upstream-**", "community/**"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,79 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      contract: ${{ steps.filter.outputs.contract }}
+      api: ${{ steps.filter.outputs.api }}
+      database: ${{ steps.filter.outputs.database }}
+      index: ${{ steps.filter.outputs.index }}
+      browser: ${{ steps.filter.outputs.browser }}
+      highlight: ${{ steps.filter.outputs.highlight }}
+      privacy: ${{ steps.filter.outputs.privacy }}
+      avgrab: ${{ steps.filter.outputs.avgrab }}
+      fireengine: ${{ steps.filter.outputs.fireengine }}
+      agent: ${{ steps.filter.outputs.agent }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+        with:
+          filters: |
+            contract:
+              - "community/**"
+              - "docker-compose.yaml"
+              - ".github/workflows/community-ci.yml"
+            api:
+              - "apps/api/**"
+              - ".github/workflows/community-ci.yml"
+            database:
+              - "community/migrations/**"
+              - "community/scripts/migrate*"
+              - "apps/api/src/db/schema/**"
+              - ".github/workflows/community-ci.yml"
+            index:
+              - "community/migrations/**"
+              - "community/index-storage/**"
+              - "community/tests/index-e2e/**"
+              - "community/docker-compose.index.yaml"
+              - "community/docker-compose.highlight.yaml"
+              - "community/docker-compose.auth.yaml"
+              - "docker-compose.yaml"
+              - "apps/api/**"
+              - "apps/highlight-service-community/**"
+              - ".github/workflows/community-ci.yml"
+            browser:
+              - "apps/browser-service-community/**"
+              - "community/docker-compose.browser.yaml"
+              - ".github/workflows/community-ci.yml"
+            highlight:
+              - "apps/highlight-service-community/**"
+              - "community/docker-compose.highlight.yaml"
+              - ".github/workflows/community-ci.yml"
+            privacy:
+              - "apps/fire-privacy-community/**"
+              - "community/docker-compose.privacy.yaml"
+              - ".github/workflows/community-ci.yml"
+            avgrab:
+              - "apps/avgrab-community/**"
+              - "community/docker-compose.avgrab.yaml"
+              - ".github/workflows/community-ci.yml"
+            fireengine:
+              - "apps/fire-engine-community/**"
+              - "community/docker-compose.fire-engine.yaml"
+              - ".github/workflows/community-ci.yml"
+            agent:
+              - "apps/agent-community/**"
+              - "community/docker-compose.agent.yaml"
+              - ".github/workflows/community-ci.yml"
+
   community-contract:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.contract == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -80,6 +152,8 @@ jobs:
           test "$(docker exec browser-community-stress ps -e -o stat= | grep -c '^Z' || true)" = 0
 
   api-build:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,6 +167,8 @@ jobs:
         run: docker build --build-arg "GIT_SHA=${GITHUB_SHA}" --tag firecrawl-community-ci .
 
   database-contract:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -132,7 +208,7 @@ jobs:
           PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
             node community/migrations/migrate.mjs status | tee /tmp/migration-status.json
           grep -q '"state": "applied"' /tmp/migration-status.json
-          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 7
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 8
           docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -v ON_ERROR_STOP=1 -c \
             "UPDATE public.schema_migrations SET checksum_sha256 = repeat('0', 64) WHERE version = '010-prerequisites'"
           if PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
@@ -182,7 +258,7 @@ jobs:
             node community/migrations/migrate.mjs adopt \
               --confirm-existing --baseline-through 040-selfhost-rpcs
           test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d legacy -Atc \
-            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) || ':' || count(*) FILTER (WHERE version = '050-revoke-public-rpc-execute' AND NOT baselined) FROM public.schema_migrations")" = "7:4:1"
+            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) || ':' || count(*) FILTER (WHERE version = '050-revoke-public-rpc-execute' AND NOT baselined) FROM public.schema_migrations")" = "8:4:1"
 
           docker exec "${POSTGRES_ID}" createdb -U postgres divergent
           for migration in \
@@ -208,6 +284,8 @@ jobs:
             "SELECT to_regclass('public.schema_migrations') IS NULL")" = "t"
 
   index-database-contract:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -258,7 +336,7 @@ jobs:
           PSQL_BINARY=/tmp/shared-psql PGUSER=postgres PGDATABASE=shared \
             node community/migrations/migrate.mjs apply --manifest community/migrations/index-db/manifest.json
           test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d shared -Atc \
-            "SELECT (SELECT count(*) FROM public.schema_migrations) || ':' || (SELECT count(*) FROM public.index_schema_migrations)")" = "7:3"
+            "SELECT (SELECT count(*) FROM public.schema_migrations) || ':' || (SELECT count(*) FROM public.index_schema_migrations)")" = "8:3"
           docker exec -i "${POSTGRES_ID}" psql -v ON_ERROR_STOP=1 -U postgres -d shared \
             < community/scripts/index-db-functions.test.sql
       - name: Refuse an untracked index schema
@@ -310,6 +388,8 @@ jobs:
           test "$(realpath "${resolved_context}")" = "$(realpath community/migrations)"
 
   index-e2e:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.index == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
@@ -327,6 +407,8 @@ jobs:
         run: node community/tests/index-e2e/run.mjs
 
   browser-service:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.browser == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -350,6 +432,8 @@ jobs:
         run: docker compose -f ../../docker-compose.yaml -f ../../community/docker-compose.browser.yaml config --quiet
 
   highlight-service:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.highlight == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -383,6 +467,8 @@ jobs:
         run: pnpm test:container
 
   privacy-service:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.privacy == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -437,6 +523,8 @@ jobs:
           fi
 
   avgrab-service:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.avgrab == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -469,6 +557,8 @@ jobs:
         run: PYTHON=python scripts/contract.sh
 
   fire-engine:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.fireengine == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -500,6 +590,8 @@ jobs:
             ./test/contract/run-docker.sh
 
   agent-service:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

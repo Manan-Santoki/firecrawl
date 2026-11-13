@@ -73,6 +73,14 @@
       "sha256": "36795deb039ce82ceac54c38eb3dd30aa696234d990f4353285d221fa2237454",
       "transactional": true,
       "irreversible": false
+    },
+    {
+      "version": "080-auth-chunk-2",
+      "description": "auth_chunk_2 RPCs required by upstream v2.11.739 authentication",
+      "file": "postgres/080-auth-chunk-2.sql",
+      "sha256": "0d1950e4d59530aa51411158bfee838a01e86a986d35afb945af43a5a320043c",
+      "transactional": true,
+      "irreversible": false
     }
   ]
 }

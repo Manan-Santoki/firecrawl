@@ -28,6 +28,7 @@ test("the checked-in manifest discovers every numbered SQL file and verifies che
     "050-revoke-public-rpc-execute",
     "060-legacy-stateful-schema",
     "070-upstream-schema-sync",
+    "080-auth-chunk-2",
   ]);
 });
 
@@ -118,6 +119,7 @@ test("status distinguishes pending, applied, baselined, and checksum mismatch", 
     "applied",
     "baselined",
     "checksum-mismatch",
+    "pending",
     "pending",
     "pending",
     "pending",
