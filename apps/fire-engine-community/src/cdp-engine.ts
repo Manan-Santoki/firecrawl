@@ -14,6 +14,7 @@ import {
 } from "./errors.js";
 import { resolveLocation } from "./geo.js";
 import { isBlockedUrl, isPrivateHost } from "./net-guard.js";
+import { localProxyFor } from "./proxy-forwarder.js";
 import type { ScrapeRequest, ScrapeSuccess } from "./schema.js";
 import { alignChromeVersion, navigatorOverrider, normalizeUserAgent, simulateUser } from "./stealth.js";
 
@@ -132,10 +133,11 @@ export class ChromeCdpEngine {
       ...userHeaders,
     };
 
-    const proxySettings = resolveProxy(
+    const resolvedProxy = resolveProxy(
       stealth ? (this.config.stealthProxy ?? this.config.proxy) : this.config.proxy,
       location.country,
     );
+    const proxySettings = resolvedProxy ? await localProxyFor(resolvedProxy) : undefined;
     const usedStealthProxy = stealth && this.config.stealthProxy !== undefined;
 
     const device = mobile ? devices[MOBILE_DEVICE]! : undefined;
