@@ -130,7 +130,7 @@ jobs:
           PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
             node community/migrations/migrate.mjs status | tee /tmp/migration-status.json
           grep -q '"state": "applied"' /tmp/migration-status.json
-          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 5
+          test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -Atc 'SELECT count(*) FROM public.schema_migrations')" = 6
           docker exec "${POSTGRES_ID}" psql -U postgres -d firecrawl -v ON_ERROR_STOP=1 -c \
             "UPDATE public.schema_migrations SET checksum_sha256 = repeat('0', 64) WHERE version = '010-prerequisites'"
           if PSQL_BINARY=/tmp/firecrawl-psql PGUSER=postgres PGDATABASE=firecrawl \
@@ -180,7 +180,7 @@ jobs:
             node community/migrations/migrate.mjs adopt \
               --confirm-existing --baseline-through 040-selfhost-rpcs
           test "$(docker exec "${POSTGRES_ID}" psql -U postgres -d legacy -Atc \
-            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) || ':' || count(*) FILTER (WHERE version = '050-revoke-public-rpc-execute' AND NOT baselined) FROM public.schema_migrations")" = "5:4:1"
+            "SELECT count(*) || ':' || count(*) FILTER (WHERE baselined) || ':' || count(*) FILTER (WHERE version = '050-revoke-public-rpc-execute' AND NOT baselined) FROM public.schema_migrations")" = "6:4:1"
 
           docker exec "${POSTGRES_ID}" createdb -U postgres divergent
           for migration in \
