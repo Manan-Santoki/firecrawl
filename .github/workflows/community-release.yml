@@ -58,6 +58,9 @@ jobs:
           - component: migrations
             context: community/migrations
             image: firecrawl-migrations-community
+          - component: dashboard
+            context: apps/dashboard-community
+            image: firecrawl-dashboard-community
     steps:
       - name: Resolve immutable release
         id: release

@@ -1,0 +1,88 @@
+# Opt-in community operator dashboard (apps/dashboard-community).
+#
+# Requires the authenticated overlay: its `firecrawl-db-migrate` service applies
+# every community migration (including 100-community-metering and
+# 110-dashboard-schema) before the API and this dashboard start.
+#
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f community/docker-compose.auth.yaml \
+#     -f community/docker-compose.dashboard.yaml \
+#     up --build
+#
+# The dashboard listens on port 3000 inside the backend network only. Publish
+# it through an authenticated TLS reverse proxy on its own hostname (see
+# apps/dashboard-community/README.md); DASHBOARD_PORT binds it to loopback for
+# local use.
+services:
+  api:
+    environment:
+      COMMUNITY_REQUEST_LOG_ENABLED: ${COMMUNITY_REQUEST_LOG_ENABLED:-true}
+      COMMUNITY_REQUEST_LOG_RETENTION_DAYS: ${COMMUNITY_REQUEST_LOG_RETENTION_DAYS:-30}
+      SELF_HOSTED_BILLING_MODE: ${SELF_HOSTED_BILLING_MODE:-metered}
+      COMMUNITY_DEFAULT_CONCURRENCY_LIMIT: ${COMMUNITY_DEFAULT_CONCURRENCY_LIMIT:-}
+
+  dashboard:
+    # Paths resolve against the first Compose file (the repository root).
+    build:
+      context: apps/dashboard-community
+      dockerfile: Dockerfile
+    depends_on:
+      firecrawl-db-migrate:
+        condition: service_completed_successfully
+      firecrawl-db-seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    environment:
+      DASHBOARD_URL: ${DASHBOARD_URL:?Set DASHBOARD_URL to the public dashboard origin}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET (32+ random characters)}
+      DASHBOARD_BOOTSTRAP_TOKEN: ${DASHBOARD_BOOTSTRAP_TOKEN:-}
+      DASHBOARD_TRUSTED_ORIGINS: ${DASHBOARD_TRUSTED_ORIGINS:-}
+      DASHBOARD_INVITE_TTL_HOURS: ${DASHBOARD_INVITE_TTL_HOURS:-72}
+      DASHBOARD_ADMIN_TEAM_ID: ${FIRECRAWL_TEAM_ID:-}
+      DATABASE_URL: postgresql://postgres:${APP_POSTGRES_PASSWORD_URLENCODED:?Set APP_POSTGRES_PASSWORD_URLENCODED}@firecrawl-db:5432/firecrawl
+      NUQ_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@${POSTGRES_HOST:-nuq-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_RATE_LIMIT_URL: ${REDIS_RATE_LIMIT_URL:-${REDIS_URL:-redis://redis:6379}}
+      REDIS_EVICT_URL: ${REDIS_EVICT_URL:-}
+      FIRECRAWL_API_URL: ${DASHBOARD_FIRECRAWL_API_URL:-http://api:3002}
+      COMMUNITY_REQUEST_LOG_RETENTION_DAYS: ${COMMUNITY_REQUEST_LOG_RETENTION_DAYS:-30}
+      # Health probes: reachability only, values are never displayed.
+      NUQ_RABBITMQ_URL: ${NUQ_RABBITMQ_URL:-amqp://rabbitmq:5672}
+      PLAYWRIGHT_MICROSERVICE_URL: ${PLAYWRIGHT_MICROSERVICE_URL:-http://playwright-service:3000/scrape}
+      BROWSER_SERVICE_URL: ${DASHBOARD_BROWSER_SERVICE_URL:-}
+      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_EMBEDDING_NAME: ${MODEL_EMBEDDING_NAME:-}
+      EMBEDDING_SERVICE_URL: ${EMBEDDING_SERVICE_URL:-}
+      FIRE_ENGINE_BETA_URL: ${FIRE_ENGINE_BETA_URL:-}
+      HIGHLIGHT_SERVICE_URL: ${HIGHLIGHT_SERVICE_URL:-}
+      AVGRAB_SERVICE_URL: ${AVGRAB_SERVICE_URL:-}
+      FIRE_PRIVACY_URL: ${FIRE_PRIVACY_URL:-}
+      AGENT_SERVICE_URL: ${AGENT_SERVICE_URL:-}
+      INDEX_SERVICE_URL: ${INDEX_SERVICE_URL:-}
+      # Optional SMTP: without it invite links are copied from the dashboard.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    expose:
+      - "3000"
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-3100}:3000"
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    restart: unless-stopped
