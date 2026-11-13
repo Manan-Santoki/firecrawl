@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.repository == 'firecrawl/firecrawl'
     name: Publish
     runs-on: ubuntu-latest
     steps:

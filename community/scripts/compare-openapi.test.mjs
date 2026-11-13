@@ -122,3 +122,19 @@ test("different authentication schemes are incompatible", () => {
   assert.equal(result.compatible, false);
   assert.match(result.semanticMismatches[0].issues.join(" "), /security contract differs/);
 });
+
+test("bearer format documentation does not change authentication semantics", () => {
+  const hosted = {
+    components: { securitySchemes: { auth: { type: "http", scheme: "bearer" } } },
+    security: [{ auth: [] }],
+    paths: { "/scrape": { post: {} } },
+  };
+  const community = structuredClone(hosted);
+  community.components.securitySchemes.auth.bearerFormat = "Firecrawl API key (fc-...) ";
+  assert.equal(compareDocuments(hosted, community).compatible, true);
+  community.components.securitySchemes.auth.scheme = "basic";
+  assert.equal(compareDocuments(hosted, community).compatible, false);
+  community.components.securitySchemes.auth.scheme = "bearer";
+  community.security = [];
+  assert.equal(compareDocuments(hosted, community).compatible, false);
+});

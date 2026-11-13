@@ -13,6 +13,7 @@ env:
 
 jobs:
   build-and-publish:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: blacksmith-2vcpu-ubuntu-2404
 
     steps:
@@ -48,4 +49,3 @@ jobs:
           python -m build
           twine upload dist/*
         working-directory: ./apps/python-sdk
-

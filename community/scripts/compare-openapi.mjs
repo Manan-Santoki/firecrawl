@@ -60,7 +60,7 @@ function normalizedSecurity(document, security) {
   return normalizeContractValue(document, security)
     .map(requirement => Object.entries(requirement)
       .map(([name, scopes]) => ({
-        scheme: normalizeContractValue(
+        scheme: normalizedSecurityScheme(
           document,
           document.components?.securitySchemes?.[name] ?? { missingScheme: name },
         ),
@@ -68,6 +68,12 @@ function normalizedSecurity(document, security) {
       }))
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+function normalizedSecurityScheme(document, value) {
+  const scheme = normalizeContractValue(document, value);
+  if (scheme.type === "http") delete scheme.bearerFormat;
+  return scheme;
 }
 
 function operationContracts(document) {

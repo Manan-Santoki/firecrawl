@@ -17,7 +17,8 @@ defaults:
 
 jobs:
   regenerate:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.repository == 'firecrawl/firecrawl' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: blacksmith-2vcpu-ubuntu-2404
 
     steps:
@@ -100,7 +101,8 @@ jobs:
             --base main
 
   publish:
-    if: github.event_name == 'push'
+    if: >-
+      github.repository == 'firecrawl/firecrawl' && (github.event_name == 'push')
     runs-on: blacksmith-2vcpu-ubuntu-2404
 
     steps:

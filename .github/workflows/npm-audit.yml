@@ -10,6 +10,7 @@ on:
 
 jobs:
   audit:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5

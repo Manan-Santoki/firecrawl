@@ -20,8 +20,17 @@ jobs:
     if: github.repository == 'Manan-Santoki/firecrawl'
     runs-on: ubuntu-latest
     steps:
+      - name: Require a workflow-capable sync credential
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [[ -z "${SYNC_TOKEN}" ]]; then
+            echo "::error::Set UPSTREAM_SYNC_TOKEN to a repository-scoped token with Contents and Workflows read/write permissions. GITHUB_TOKEN cannot import upstream workflow changes. See community/RELEASES.md."
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           ref: main
           fetch-depth: 0
       - name: Fetch canonical upstream
@@ -64,16 +73,13 @@ jobs:
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
         shell: bash
         run: |
-          previous=""
-          previous_ref=""
-          while IFS= read -r candidate_ref; do
-            if git merge-base --is-ancestor "${candidate_ref}^{commit}" origin/main; then
-              previous="${candidate_ref##*/}"
-              previous_ref="${candidate_ref}"
-              break
-            fi
-          done < <(git for-each-ref --sort=-version:refname --format='%(refname)' \
-            'refs/tags/canonical/v*' | grep -E '/v[0-9]+\.[0-9]+\.[0-9]+$')
+          state="$(node community/scripts/upstream-state.mjs origin/main)"
+          previous="$(jq -r .tag <<< "${state}")"
+          previous_ref="$(jq -r .sourceSha <<< "${state}")"
+          if ! git merge-base --is-ancestor "${previous_ref}" "${SOURCE_SHA}"; then
+            echo "::error::Selected upstream release does not descend from the integrated release."
+            exit 1
+          fi
           release_class="major"
           manual="true"
           high_risk="false"
@@ -94,6 +100,7 @@ jobs:
           fi
           {
             echo "previous=${previous:-none}"
+            echo "previous_sha=${previous_ref}"
             echo "release_class=${release_class}"
             echo "high_risk=${high_risk}"
             echo "manual=${manual}"
@@ -103,11 +110,13 @@ jobs:
         env:
           BRANCH: ${{ steps.release.outputs.branch }}
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          PREVIOUS_SHA: ${{ steps.risk.outputs.previous_sha }}
+          TAG: ${{ steps.release.outputs.tag }}
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
+          if [[ "${SOURCE_SHA}" == "${PREVIOUS_SHA}" ]] || git merge-base --is-ancestor "${SOURCE_SHA}" origin/main; then
             echo "updated=false" >> "${GITHUB_OUTPUT}"
             echo "conflict=false" >> "${GITHUB_OUTPUT}"
             exit 0
@@ -124,8 +133,7 @@ jobs:
             exit 0
           fi
           git checkout -B "${BRANCH}" origin/main
-          if ! git merge --no-edit "${SOURCE_SHA}"; then
-            git merge --abort
+          if ! bash community/scripts/merge-upstream.sh; then
             echo "conflict=true" >> "${GITHUB_OUTPUT}"
             echo "updated=false" >> "${GITHUB_OUTPUT}"
             exit 0
@@ -187,4 +195,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
-        run: gh issue create --title "Upstream sync conflict for ${TAG}" --body "The automated upstream merge conflicted with community changes. Resolve it on a sync branch; no deployment was attempted."
+        run: |
+          title="Upstream sync conflict for ${TAG}"
+          existing="$(gh issue list --state open --search "${title} in:title" --json title,number --jq ".[] | select(.title == \"${title}\") | .number")"
+          if [[ -z "${existing}" ]]; then
+            gh issue create --title "${title}" --body "The automated upstream merge conflicted with community changes. Resolve it on a sync branch; no deployment was attempted."
+          fi
+          echo "::error::Upstream merge needs conflict resolution."
+          exit 1

@@ -8,6 +8,18 @@
 - **Deployment scope:** isolated managed staging only. Production remains an explicit, separately audited manual promotion.
 - **Superseded candidate:** `.3` failed browser-soak qualification and was not promoted; `.4` contains the public teardown/process-lifecycle repair.
 
+## Sync configuration and provenance
+
+Set the public repository secret `UPSTREAM_SYNC_TOKEN` to a fine-grained personal access token scoped only to `Manan-Santoki/firecrawl`, with **Contents: read/write** and **Workflows: read/write**. The checkout uses this credential for Git pushes, including the exact upstream mirror. The built-in `GITHUB_TOKEN` still handles issues, pull requests and explicit CI dispatch. Adding `actions: write` to workflow permissions does not grant permission to import workflow files. An absent credential fails early with setup instructions; an expired or insufficient token must be replaced in repository settings.
+
+`community/upstream.json` records the exact integrated canonical tag and commit. Its initial `v2.11.289` entry records the source already integrated by PR #10 (and repeated by #11). Both were squash merges, which discarded canonical ancestry. Sync and release naming validate this record against the canonical tag, so squashing no longer causes duplicate imports or stale version labels. On the next sync branch, automation restores the recorded ancestor without changing the tree, then merges only the newer upstream changes and advances the record. Prefer **Create a merge commit** for sync PRs; never advance provenance for code that has not been integrated.
+
+Community owns `.github/workflows`: sync preserves the workflow directory from community `main`, including its repository guards. Newly introduced upstream workflows are not imported into the community sync branch. The `upstream` mirror still points at the unmodified canonical release. Port useful upstream CI changes deliberately into community workflows. Source conflicts outside this directory remain blocking and produce one issue per upstream tag.
+
+Existing release tags remain immutable. New releases use the recorded upstream version when runtime inputs change; a provenance-only correction does not rebuild runtime images.
+
+The compatibility checker ignores the OpenAPI `bearerFormat` documentation hint when comparing HTTP authentication, but still rejects changed schemes, removed authentication, missing operations and incompatible schemas. The September 13 report also contains a missing `GET /agent` operation and other contract differences; correcting the hint does not certify hosted parity or authorize staging/production promotion.
+
 ## Update classes
 
 | Class | Default action |

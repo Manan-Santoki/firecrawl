@@ -56,6 +56,22 @@ jobs:
             --hosted "${HOSTED_OPENAPI_URL}" \
             --community "${COMMUNITY_OPENAPI_URL}" \
             --output artifacts/openapi-compatibility.json
+      - name: Summarize compatibility evidence
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const report = JSON.parse(fs.readFileSync("artifacts/openapi-compatibility.json", "utf8"));
+          const lines = ["## Hosted v2 compatibility", ""];
+          if (report.configurationError || report.comparisonError) {
+            lines.push(report.configurationError ?? report.comparisonError);
+          } else {
+            lines.push(`Missing operations: ${report.counts.missing}. Semantic mismatches: ${report.counts.semanticMismatches}.`, "");
+            for (const operation of report.missing) lines.push(`- Missing: ${operation}`);
+            for (const entry of report.semanticMismatches) lines.push(`- ${entry.operation}: ${entry.issues.join("; ")}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          NODE
       - name: Upload compatibility evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -78,7 +94,6 @@ jobs:
           else
             gh issue comment "${issue}" --body "${body}"
           fi
-          exit 1
       - name: Close resolved OpenAPI drift issue
         if: steps.comparison.outcome == 'success'
         env:
@@ -89,3 +104,8 @@ jobs:
           if [[ -n "${issue}" ]]; then
             gh issue close "${issue}" --comment "Hosted v2 operation compatibility passed in ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
           fi
+      - name: Enforce compatibility result
+        if: always() && steps.comparison.outcome == 'failure'
+        run: |
+          echo "::error::Hosted v2 compatibility failed. See the job summary and uploaded report for missing operations or contract differences."
+          exit 1

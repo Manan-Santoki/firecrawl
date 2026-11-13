@@ -13,6 +13,7 @@ permissions: {}
 
 jobs:
   build:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -62,6 +63,7 @@ jobs:
           provenance: false
 
   manifest:
+    if: github.repository == 'firecrawl/firecrawl'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: build
     environment: ghcr-publish
