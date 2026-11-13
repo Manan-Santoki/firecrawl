@@ -57,6 +57,9 @@ export function toStatus(run: AgentRun) {
     // hosted job-access store can authorize status reads from this service.
     teamId: run.teamId,
     createdAt: run.createdAt,
+    ...(run.zeroDataRetention && run.zeroDataRetentionMinutes
+      ? { zeroDataRetentionMinutes: run.zeroDataRetentionMinutes }
+      : {}),
   };
 }
 

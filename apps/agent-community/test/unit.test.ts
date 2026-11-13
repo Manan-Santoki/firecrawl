@@ -139,6 +139,11 @@ describe("status mapping", () => {
     assert.equal(toStatus(run({ state: "cancelled", error: "c" })).status, "failed");
     assert.equal("data" in toStatus(run({ state: "failed" })), false);
     assert.equal("apiKey" in toStatus(run({ apiKey: "secret" })), false);
+    // Ownership fields the community gateway uses for job access.
+    const owned = toStatus(run({ zeroDataRetention: true, zeroDataRetentionMinutes: 15 }));
+    assert.equal(owned.teamId, "t1");
+    assert.equal(typeof owned.createdAt, "string");
+    assert.equal(owned.zeroDataRetentionMinutes, 15);
   });
 });
 

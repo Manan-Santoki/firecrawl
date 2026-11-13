@@ -63,7 +63,7 @@ docker compose \
   up --build
 ```
 
-Set `AGENT_INTEROP_SECRET` (shared by the API and the agent service), `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `AGENT_MODEL` (or `COMMUNITY_MODEL_NAME`). The service is release-qualified only after the gateway's agent job-access check works without Firecrawl's hosted stores; see the capability matrix and the service README.
+Set `AGENT_INTEROP_SECRET` (shared by the API and the agent service), `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `AGENT_MODEL` (or `COMMUNITY_MODEL_NAME`). Without a Bigtable job access table, the API resolves agent run ownership from the agent service's status (team and creation time, 24h window), so status, cancel, trace, skill and snapshot work on a self-hosted stack. See the capability matrix for current evidence.
 
 ## Security boundary
 

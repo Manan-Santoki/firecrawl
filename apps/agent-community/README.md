@@ -92,8 +92,11 @@ authenticates the API to this service.
 | `GET /v2/extract/:id/options` | status fallback of the pre-v2.11.739 gateway |
 | `GET /health/liveness`, `GET /health/readiness` | container health |
 
-Status responses also carry `teamId` and `createdAt` so a gateway without
-Firecrawl's hosted job-access store can authorize reads from this service.
+Status responses also carry `teamId`, `createdAt` and (for zero data
+retention runs) `zeroDataRetentionMinutes`. When the API has no
+`BIGTABLE_JOB_ACCESS_TABLE`, its agent job lookup
+(`apps/api/src/lib/operational-job-access.ts`) reads ownership from here, keeps
+the run fetchable for 24h from its start and still answers 404 to other teams.
 
 ## Behavior and limits
 
@@ -130,4 +133,10 @@ AGENT_LIVE_FIRECRAWL_API_URL=http://localhost:3002 pnpm test:live
 ```
 
 The contract tests drive the service with request shapes copied from the
-upstream gateway (`test/gateway.ts`).
+upstream gateway (`test/gateway.ts`). For a full-stack check without a real
+model, run `PORT=39200 pnpm exec tsx test/mock-openai-server.ts` and point
+`AGENT_OPENAI_BASE_URL` at it (from containers:
+`http://host.docker.internal:39200`); the API snips in
+`apps/api/src/__tests__/snips/v2/agent-selfhost-access.test.ts` then run with
+`TEST_SUITE_SELF_HOSTED=true`, `EXTRACT_V3_BETA_URL` and `AGENT_INTEROP_SECRET`
+set.

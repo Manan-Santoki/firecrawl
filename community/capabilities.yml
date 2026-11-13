@@ -99,8 +99,8 @@
       "name": "Autonomous Agent API",
       "cloud": true,
       "community": "verification-needed",
-      "requirements": "apps/agent-community via community/docker-compose.agent.yaml: AGENT_INTEROP_SECRET shared with the API, an OpenAI-compatible model (OPENAI_BASE_URL, AGENT_MODEL or COMMUNITY_MODEL_NAME), Redis, and the stack's own API for search/scrape/map (interact optional via the browser overlay). The API's job-access check must resolve agent runs without Bigtable (v2.11.739) or Supabase/GCS agent rows (v2.11.289) before GET /v2/agent/:id works",
-      "evidence": "Unit, contract (upstream v2.11.739 gateway request shapes against a mock model and mock Firecrawl API), Redis store and built-image smoke tests in Community CI; no gateway end-to-end or staging run yet. Exchange, suggestions and approvals are not implemented"
+      "requirements": "apps/agent-community via community/docker-compose.agent.yaml: AGENT_INTEROP_SECRET shared with the API, an OpenAI-compatible model (OPENAI_BASE_URL, AGENT_MODEL or COMMUNITY_MODEL_NAME), Redis, and the stack's own API for search/scrape/map (interact optional via the browser overlay). Without BIGTABLE_JOB_ACCESS_TABLE the API authorizes agent runs from the agent service's status (24h window). GET /v2/agent (list) additionally needs DB authentication and ClickHouse",
+      "evidence": "Unit, contract (upstream v2.11.739 gateway request shapes against a mock model and mock Firecrawl API), Redis store and built-image smoke tests in Community CI; local Compose end-to-end (API + overlay + mock OpenAI-compatible model) completed POST, status, trace, snapshot, skill, cancel and thread, and the self-hosted agent access snips passed. No staging run or real-model evaluation yet. Exchange, suggestions and approvals are not implemented"
     },
     {
       "id": "research-index",
