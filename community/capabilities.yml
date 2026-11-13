@@ -215,9 +215,9 @@
       "group": "Documents",
       "name": "Audio and video extraction",
       "cloud": true,
-      "community": "planned",
-      "requirements": "Provider-neutral replacement for AVGRAB_SERVICE_URL",
-      "evidence": "No release-qualified community service yet"
+      "community": "verification-needed",
+      "requirements": "apps/avgrab-community via community/docker-compose.avgrab.yaml (AVGRAB_API_KEY, AVGRAB_SIGNING_KEY, AVGRAB_PUBLIC_URL reachable by clients or an S3-compatible bucket); yt-dlp and ffmpeg; provider availability, rate limits and bot checks are outside the operator's control",
+      "evidence": "Implements the upstream v2.11.739 AVGRAB_SERVICE_URL contract (/supported-urls, /download, /download-video, /videos, /metadata, /resolve). Unit tests plus black-box container contract tests with API-shaped request bodies against local ffmpeg fixtures in Community CI; self-hosted engine routing for audio/video formats patched in the API. A local Compose run verified audio, video, YouTube metadata/transcript and /v2/map channel expansion end to end; no release-qualified staging run yet"
     },
     {
       "id": "webhooks",

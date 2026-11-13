@@ -409,8 +409,12 @@ const engineOptions: {
       pdf: false,
       document: false,
       image: false,
-      audio: false,
-      video: false,
+      // Without fire-engine (self-hosted), the audio/video formats run in the
+      // AVGRAB_SERVICE_URL transformers after a plain page fetch; browser
+      // cookies are optional there. With fire-engine, keep routing them
+      // through chrome-cdp so cookies reach avgrab (see audio-routing.test.ts).
+      audio: !useFireEngine,
+      video: !useFireEngine,
       atsv: false,
       location: false,
       mobile: false,
@@ -475,8 +479,9 @@ const engineOptions: {
       pdf: false,
       document: false,
       image: false,
-      audio: false,
-      video: false,
+      // See playwright: self-hosted audio/video only needs the page fetch.
+      audio: !useFireEngine,
+      video: !useFireEngine,
       atsv: false,
       location: false,
       mobile: false,

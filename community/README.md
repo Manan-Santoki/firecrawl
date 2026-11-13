@@ -78,6 +78,9 @@ The emulator is a single-node store. The index README documents its durability l
 ## PII redaction service
 
 `redactPII` on scrape and parse calls a redaction service at `FIRE_PRIVACY_URL`. Firecrawl Cloud's service is private. The community replacement in [`apps/fire-privacy-community`](../apps/fire-privacy-community) implements the same `POST /redact` contract using Microsoft Presidio and a CPU spaCy model. Enable it with:
+## Audio and video service
+
+The provider-neutral replacement for Firecrawl's private `AVGRAB_SERVICE_URL` service lives in [`apps/avgrab-community`](../apps/avgrab-community). It implements the upstream contract used by the `audio` and `video` scrape formats, generic video discovery, YouTube metadata/transcripts and YouTube channel/playlist expansion in `/v2/map`, using yt-dlp and ffmpeg. Enable it with:
 
 ```bash
 docker compose \
@@ -87,6 +90,11 @@ docker compose \
 ```
 
 The overlay sets `FIRE_PRIVACY_URL` and raises `FIRE_PRIVACY_TIMEOUT_MS` to 30000 on the `api` service, which also runs the workers. The service stays on the Compose network because the stock API client sends no credentials. Detection quality differs from Cloud's hosted model. The capability remains `verification-needed` until an end-to-end scrape with `redactPII` is release-qualified. See the service README for entity coverage and configuration.
+  -f community/docker-compose.avgrab.yaml \
+  up --build
+```
+
+Set a URL-safe `AVGRAB_API_KEY` (the API sends no auth header, so the overlay embeds the key as a path prefix in `AVGRAB_SERVICE_URL`), a stable `AVGRAB_SIGNING_KEY`, and `AVGRAB_PUBLIC_URL` to an address where clients can download the signed, expiring media links (or configure the S3-compatible backend). The capability stays **Verification needed** until a staging release run qualifies it.
 
 ## Security boundary
 
